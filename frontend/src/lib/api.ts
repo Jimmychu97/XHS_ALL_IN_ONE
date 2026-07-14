@@ -874,3 +874,29 @@ export async function runAutoTask(taskId: number): Promise<AutoTaskRunResult> {
   const response = await http.post<AutoTaskRunResult>(`/auto-tasks/${taskId}/run`);
   return response.data;
 }
+
+// Qianfan
+export async function fetchQianFanCategories(accountId: number): Promise<{ items: unknown[] }> {
+  const response = await http.get<{ items: unknown[] }>("/xhs/qianfan/categories", { params: { account_id: accountId } });
+  return response.data;
+}
+
+export async function fetchQianFanDistributors(accountId: number, choice = "-1", page = 1): Promise<{ items: unknown[]; total: number }> {
+  const response = await http.get<{ items: unknown[]; total: number }>("/xhs/qianfan/distributors", { params: { account_id: accountId, choice, page } });
+  return response.data;
+}
+
+export async function fetchQianFanDistributorDetail(accountId: number, userId: string): Promise<Record<string, unknown>> {
+  const response = await http.get<Record<string, unknown>>(`/xhs/qianfan/distributors/${userId}`, { params: { account_id: accountId } });
+  return response.data;
+}
+
+export async function qianFanAiChat(payload: { messages: { role: string; content: string }[]; distributor_context?: Record<string, unknown> }): Promise<{ reply: string }> {
+  const response = await http.post<{ reply: string }>("/xhs/qianfan/ai-customer-service/chat", payload);
+  return response.data;
+}
+
+export async function qianFanGenerateMessage(payload: { distributor_info: Record<string, unknown>; intent?: string }): Promise<{ message: string }> {
+  const response = await http.post<{ message: string }>("/xhs/qianfan/ai-customer-service/generate-message", payload);
+  return response.data;
+}

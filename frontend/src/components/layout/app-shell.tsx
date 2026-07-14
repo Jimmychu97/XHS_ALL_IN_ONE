@@ -18,6 +18,7 @@ import {
   SendOutlined,
   SettingOutlined,
   ThunderboltOutlined,
+  ShopOutlined,
   StarOutlined,
   SunOutlined,
   UserOutlined,
@@ -65,6 +66,7 @@ const mainNavItems: MenuProps["items"] = [
   { key: "/platforms/xhs/drafts", icon: <FileTextOutlined />, label: "草稿工坊" },
   { key: "/platforms/xhs/publish", icon: <SendOutlined />, label: "发布中心" },
   { key: "/platforms/xhs/auto-ops", icon: <ThunderboltOutlined />, label: "自动运营" },
+  { key: "/platforms/xhs/qianfan", icon: <ShopOutlined />, label: "千帆平台" },
 ];
 
 const footerNavItems: MenuProps["items"] = [

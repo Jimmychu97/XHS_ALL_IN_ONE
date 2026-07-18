@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.adapters.xhs.creator_login_adapter import XhsCreatorLoginAdapter
 from backend.app.adapters.xhs.pc_login_adapter import XhsPcLoginAdapter
+from backend.app.adapters.xhs.qianfan_login_adapter import QianfanLoginAdapter
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.core.security import decrypt_text, encrypt_text
@@ -82,6 +83,10 @@ def get_pc_login_adapter() -> XhsPcLoginAdapter:
 
 def get_creator_login_adapter() -> XhsCreatorLoginAdapter:
     return XhsCreatorLoginAdapter()
+
+
+def get_qianfan_login_adapter() -> QianfanLoginAdapter:
+    return QianfanLoginAdapter()
 
 
 def _mask_phone(phone: str) -> str:
@@ -175,6 +180,43 @@ def pc_qrcode(
     }
 
 
+# ── 千帆账号导入 ──────────────────────────────────────────────
+
+
+class QianfanCookieImport(BaseModel):
+    cookie_string: str
+
+
+@router.post("/qianfan/import-cookie")
+def qianfan_import_cookie(
+    payload: QianfanCookieImport,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    adapter: QianfanLoginAdapter = Depends(get_qianfan_login_adapter),
+):
+    """手动导入千帆 Cookie"""
+    result = adapter.save_cookies(payload.cookie_string)
+    if result["status"] != "confirmed":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cookie 导入失败")
+
+    user_info = adapter.get_user_info(result["cookies"])
+    cookies_text = json.dumps(result["cookies"], ensure_ascii=False, separators=(",", ":"))
+
+    account, action = upsert_platform_account_from_login(
+        db=db,
+        user_id=current_user.id,
+        platform="xhs",
+        sub_type="qianfan",
+        user_info=user_info,
+        cookies_text=cookies_text,
+    )
+    db.commit()
+    return {"account": serialize_account(account, action)}
+
+
+# ── Creator QR Code ──────────────────────────────────────────────
+
+
 @router.post("/creator/qrcode")
 def creator_qrcode(
     current_user: User = Depends(get_current_user),
@@ -221,7 +263,7 @@ def login_session(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Login session not found")
     if session.status in {"confirmed", "expired"}:
         return {"session_id": session.id, "status": session.status, "qr_url": session.qr_url}
-    if session.sub_type not in {"pc", "creator"} or not session.qr_id:
+    if session.sub_type not in {"pc", "creator", "qianfan"} or not session.qr_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported login session")
 
     cookies, sync_creator = _load_temp_state(decrypt_text(session.encrypted_temp_cookies))

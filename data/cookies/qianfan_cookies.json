@@ -1,0 +1,19 @@
+{
+  "cookie_string": "acw_tc=0a8f07e517842752784763461e98cc8c58fb11fe616f6ed68858aeb994f7c0; a1=19f6f179835gkdg8iyrfctqlhsjx48xif1gb9wczp50000110097; webId=ed54b984aa68336c438d2c43169aa6a2; websectiga=59d3ef1e60c4aa37a7df3c23467bd46d7f1da0c1918cf335ee7f2e9e52ac04cf; sec_poison_id=22975d4c-f761-4be5-abf5-b4669c933a66; gid=yjiKiyWDyJiqyjiKiyWjYyESq2kTfkY3vFiSkuU9A1xMVD28C4YC3j888yy88jW8i0yq02S0; customer-sso-sid=68c5176634039404664586270ni9hjj40lftf23x; x-user-id-pgy.xiaohongshu.com=5574fe7867bc6570f28d772a; customerClientId=277133656375977; solar.beaker.session.id=AT-68c517663403940466409483vgtsff4mqkzy54hj; access-token-pgy.xiaohongshu.com=customer.pgy.AT-68c517663403940466409483vgtsff4mqkzy54hj; access-token-pgy.beta.xiaohongshu.com=customer.pgy.AT-68c517663403940466409483vgtsff4mqkzy54hj; xsecappid=ratlin-merchant; loadts=1784275276592",
+  "cookie_dict": {
+    "acw_tc": "0a8f07e517842752784763461e98cc8c58fb11fe616f6ed68858aeb994f7c0",
+    "a1": "19f6f179835gkdg8iyrfctqlhsjx48xif1gb9wczp50000110097",
+    "webId": "ed54b984aa68336c438d2c43169aa6a2",
+    "websectiga": "59d3ef1e60c4aa37a7df3c23467bd46d7f1da0c1918cf335ee7f2e9e52ac04cf",
+    "sec_poison_id": "22975d4c-f761-4be5-abf5-b4669c933a66",
+    "gid": "yjiKiyWDyJiqyjiKiyWjYyESq2kTfkY3vFiSkuU9A1xMVD28C4YC3j888yy88jW8i0yq02S0",
+    "customer-sso-sid": "68c5176634039404664586270ni9hjj40lftf23x",
+    "x-user-id-pgy.xiaohongshu.com": "5574fe7867bc6570f28d772a",
+    "customerClientId": "277133656375977",
+    "solar.beaker.session.id": "AT-68c517663403940466409483vgtsff4mqkzy54hj",
+    "access-token-pgy.xiaohongshu.com": "customer.pgy.AT-68c517663403940466409483vgtsff4mqkzy54hj",
+    "access-token-pgy.beta.xiaohongshu.com": "customer.pgy.AT-68c517663403940466409483vgtsff4mqkzy54hj",
+    "xsecappid": "ratlin-merchant",
+    "loadts": "1784275276592"
+  }
+}

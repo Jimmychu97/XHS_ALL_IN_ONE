@@ -767,19 +767,48 @@ export async function uploadPublishAsset(assetId: number): Promise<PublishAsset>
 }
 
 export async function importXhsCookieAccount(payload: {
-  sub_type: "pc" | "creator";
+  sub_type: "pc" | "creator" | "qianfan";
   cookie_string: string;
   sync_creator?: boolean;
 }): Promise<PlatformAccount> {
+  if (payload.sub_type === "qianfan") {
+    const response = await http.post<PlatformAccount>("/xhs/login-sessions/qianfan/import-cookie", {
+      cookie_string: payload.cookie_string,
+    });
+    return response.data;
+  }
   const response = await http.post<PlatformAccount>("/accounts/import-cookie", {
     platform: "xhs",
-    ...payload
+    ...payload,
   });
   return response.data;
 }
 
 export async function checkAccount(accountId: number): Promise<PlatformAccount> {
   const response = await http.post<PlatformAccount>(`/accounts/${accountId}/check`);
+  return response.data;
+}
+
+export async function saveAccountCredentials(
+  accountId: number,
+  payload: { username: string; password: string }
+): Promise<{ id: number; message: string }> {
+  const response = await http.post<{ id: number; message: string }>(`/accounts/${accountId}/credentials`, payload);
+  return response.data;
+}
+
+export async function getAccountCredentialsStatus(accountId: number): Promise<{ id: number; has_credentials: boolean; auto_renew: boolean }> {
+  const response = await http.get<{ id: number; has_credentials: boolean; auto_renew: boolean }>(`/accounts/${accountId}/credentials`);
+  return response.data;
+}
+
+export async function toggleAutoRenew(accountId: number): Promise<{ id: number; auto_renew: boolean }> {
+  const response = await http.post<{ id: number; auto_renew: boolean }>(`/accounts/${accountId}/toggle-auto-renew`);
+  return response.data;
+}
+
+export async function renewAccountCookie(accountId: number): Promise<{ success: boolean; message: string }> {
+  const response = await http.post<{ success: boolean; message: string }>(`/accounts/${accountId}/renew`);
   return response.data;
 }
 
@@ -872,6 +901,23 @@ export async function deleteAutoTask(taskId: number): Promise<{ id: number; stat
 
 export async function runAutoTask(taskId: number): Promise<AutoTaskRunResult> {
   const response = await http.post<AutoTaskRunResult>(`/auto-tasks/${taskId}/run`);
+  return response.data;
+}
+
+// Qianfan Browser Login
+export async function startQianfanBrowserLogin(
+  username: string,
+  password: string
+): Promise<{ status: string; message: string }> {
+  const response = await http.post<{ status: string; message: string }>("/xhs/qianfan/browser-login/start", {
+    username,
+    password,
+  });
+  return response.data;
+}
+
+export async function pollQianfanLoginStatus(): Promise<{ status: string; message: string; cookies?: Record<string, string> }> {
+  const response = await http.get<{ status: string; message: string; cookies?: Record<string, string> }>("/xhs/qianfan/browser-login/status");
   return response.data;
 }
 

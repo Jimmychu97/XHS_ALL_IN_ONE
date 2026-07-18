@@ -3,13 +3,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import requests
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.core.security import encrypt_text
+from backend.app.core.security import encrypt_text, decrypt_text
 from backend.app.core.time import shanghai_now
 from backend.app.models import AccountCookieVersion, PlatformAccount
 from xhs_utils.cookie_util import trans_cookies
+
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def account_profile_from_user_info(user_info: dict[str, Any]) -> dict[str, Any]:
@@ -158,3 +162,62 @@ def upsert_platform_account_from_login(
         )
     )
     return account, action
+
+
+async def check_account_health(account: PlatformAccount) -> bool:
+    """检查账号 Cookie 是否健康"""
+    if account.sub_type == "qianfan":
+        return await check_qianfan_health(account)
+    elif account.sub_type == "creator":
+        return await check_creator_health(account)
+    elif account.sub_type == "pc":
+        return await check_pc_health(account)
+    return False
+
+
+async def check_qianfan_health(account: PlatformAccount) -> bool:
+    """检查千帆账号健康状态"""
+    from backend.app.core.database import SessionLocal
+    from sqlalchemy import select as sa_select
+    
+    with SessionLocal() as db:
+        cookie_version = db.scalar(
+            sa_select(AccountCookieVersion)
+            .where(AccountCookieVersion.platform_account_id == account.id)
+            .order_by(AccountCookieVersion.created_at.desc())
+        )
+    
+    if not cookie_version:
+        return False
+    
+    try:
+        cookies_text = decrypt_text(cookie_version.encrypted_cookies)
+        cookies = decode_cookie_text(cookies_text)
+        
+        # 请求千帆 API 验证
+        resp = requests.get(
+            "https://pgy.xiaohongshu.com/api/draco/distributor-square/distributors-tags",
+            params={"types": "distribution_category"},
+            cookies=cookies,
+            timeout=10,
+            verify=False,
+        )
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("success", False)
+        return False
+    except Exception as e:
+        return False
+
+
+async def check_creator_health(account: PlatformAccount) -> bool:
+    """检查 Creator 账号健康状态"""
+    # TODO: 实现 Creator 健康检查
+    return account.status == "active"
+
+
+async def check_pc_health(account: PlatformAccount) -> bool:
+    """检查 PC 账号健康状态"""
+    # TODO: 实现 PC 健康检查
+    return account.status == "active"

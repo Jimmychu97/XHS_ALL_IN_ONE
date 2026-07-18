@@ -7,10 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.adapters.xhs.qianfan_adapter import QianFanAdapter
+from sqlalchemy import select as sa_select
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.core.security import decrypt_text
-from backend.app.models import ModelConfig, PlatformAccount, User
+from backend.app.models import AccountCookieVersion, ModelConfig, PlatformAccount, User
 from backend.app.services.ai_service import _load_json_response
 
 router = APIRouter(prefix="/xhs/qianfan", tags=["xhs-qianfan"])
@@ -20,9 +21,29 @@ def _get_account_cookies(account_id: int, user: User, db: Session) -> str:
     account = db.get(PlatformAccount, account_id)
     if not account or account.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-    if not account.encrypted_cookies:
+    cookie_version = db.scalars(
+        sa_select(AccountCookieVersion)
+        .where(AccountCookieVersion.platform_account_id == account_id)
+        .order_by(AccountCookieVersion.created_at.desc(), AccountCookieVersion.id.desc())
+    ).first()
+    if not cookie_version:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account has no cookies")
-    return decrypt_text(account.encrypted_cookies)
+    return decrypt_text(cookie_version.encrypted_cookies)
+
+
+def _get_qianfan_cookies(account_id: int, user: User, db: Session) -> str:
+    """优先找 qianfan 类型账号，找不到则用传入的 account_id。"""
+    qianfan_account = db.scalars(
+        sa_select(PlatformAccount)
+        .where(
+            PlatformAccount.user_id == user.id,
+            PlatformAccount.platform == "xhs",
+            PlatformAccount.sub_type == "qianfan",
+        )
+        .order_by(PlatformAccount.created_at.desc())
+    ).first()
+    target_id = qianfan_account.id if qianfan_account else account_id
+    return _get_account_cookies(target_id, user, db)
 
 
 def _get_default_text_model(db: Session, user: User) -> tuple[ModelConfig, str]:
@@ -63,7 +84,7 @@ def get_categories(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    cookies_str = _get_account_cookies(account_id, current_user, db)
+    cookies_str = _get_qianfan_cookies(account_id, current_user, db)
     try:
         return {"items": QianFanAdapter().get_categories(cookies_str)}
     except Exception as exc:
@@ -78,7 +99,7 @@ def get_distributors(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    cookies_str = _get_account_cookies(account_id, current_user, db)
+    cookies_str = _get_qianfan_cookies(account_id, current_user, db)
     try:
         return QianFanAdapter().get_distributors(cookies_str, choice, page)
     except Exception as exc:
@@ -92,7 +113,7 @@ def get_distributor_detail(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    cookies_str = _get_account_cookies(account_id, current_user, db)
+    cookies_str = _get_qianfan_cookies(account_id, current_user, db)
     try:
         return QianFanAdapter().get_distributor_detail(cookies_str, user_id)
     except Exception as exc:

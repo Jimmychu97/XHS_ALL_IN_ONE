@@ -5,16 +5,20 @@ import {
   Card,
   Col,
   Empty,
+  Input,
+  message,
   Modal,
   Row,
   Space,
   Spin,
   Statistic,
+  Switch,
   Tag,
   Typography,
 } from "antd";
 import {
   DeleteOutlined,
+  KeyOutlined,
   PlusOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
@@ -24,7 +28,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { AddAccountDrawer } from "../../../components/account/add-account-drawer";
-import { checkAccount, deleteAccount, fetchAccounts } from "../../../lib/api";
+import { checkAccount, deleteAccount, fetchAccounts, saveAccountCredentials, toggleAutoRenew, renewAccountCookie } from "../../../lib/api";
 import { formatShanghaiTime } from "../../../lib/time";
 import type { PlatformAccount } from "../../../types";
 
@@ -115,6 +119,70 @@ export function XhsAccountsPage() {
     });
   }
 
+  function handleSaveCredentials(account: PlatformAccount) {
+    let username = "";
+    let password = "";
+
+    Modal.confirm({
+      title: "保存账号密码",
+      icon: <KeyOutlined />,
+      content: (
+        <div style={{ marginTop: 16 }}>
+          <Input
+            placeholder="账号/用户名"
+            onChange={(e) => { username = e.target.value; }}
+            style={{ marginBottom: 8 }}
+          />
+          <Input.Password
+            placeholder="密码"
+            onChange={(e) => { password = e.target.value; }}
+          />
+          <p style={{ marginTop: 8, fontSize: 12, color: "rgba(255,255,255,0.45)" }}>
+            账号密码将加密存储，用于 Cookie 过期时自动续命
+          </p>
+        </div>
+      ),
+      okText: "保存",
+      cancelText: "取消",
+      onOk: async () => {
+        if (!username || !password) {
+          message.error("请输入账号和密码");
+          return;
+        }
+        try {
+          await saveAccountCredentials(account.id, { username, password });
+          message.success("账号密码已保存");
+          loadAccounts();
+        } catch {
+          message.error("保存失败");
+        }
+      },
+    });
+  }
+
+  async function handleToggleAutoRenew(account: PlatformAccount, checked: boolean) {
+    try {
+      await toggleAutoRenew(account.id);
+      message.success(checked ? "已开启自动续命" : "已关闭自动续命");
+      loadAccounts();
+    } catch {
+      message.error("操作失败");
+    }
+  }
+
+  async function handleRenewCookie(account: PlatformAccount) {
+    const hide = message.loading("正在续命 Cookie...");
+    try {
+      await renewAccountCookie(account.id);
+      hide();
+      message.success("Cookie 续命成功");
+      loadAccounts();
+    } catch (e) {
+      hide();
+      message.error(String(e));
+    }
+  }
+
   useEffect(() => {
     void loadAccounts();
   }, []);
@@ -193,6 +261,8 @@ export function XhsAccountsPage() {
             {accounts.map((account) => {
               const isChecking = checkingAccountIds.has(account.id);
               const isCreator = account.sub_type === "creator";
+              const isQianfan = account.sub_type === "qianfan";
+              const accentColor = isCreator ? "#722ed1" : isQianfan ? "#d4380d" : "#1668dc";
               const statusColor = statusColorMap[account.status] || "default";
 
               return (
@@ -201,8 +271,8 @@ export function XhsAccountsPage() {
                     size="small"
                     style={{
                       background: "#1a1a1a",
-                      borderColor: isCreator ? "#303050" : "#303030",
-                      borderLeft: `3px solid ${isCreator ? "#722ed1" : "#1668dc"}`,
+                      borderColor: isCreator ? "#303050" : isQianfan ? "#3d1a00" : "#303030",
+                      borderLeft: `3px solid ${accentColor}`,
                     }}
                     styles={{ body: { padding: 20 } }}
                   >
@@ -238,7 +308,24 @@ export function XhsAccountsPage() {
                     </div>
 
                     {/* Stats row */}
-                    {isCreator ? (
+                    {isQianfan ? (
+                      <Row gutter={16} style={{ marginBottom: 12 }}>
+                        <Col span={12}>
+                          <Statistic
+                            title={<span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>类型</span>}
+                            value="千帆平台"
+                            valueStyle={{ color: "#d4380d", fontSize: 14 }}
+                          />
+                        </Col>
+                        <Col span={12}>
+                          <Statistic
+                            title={<span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>Cookie 状态</span>}
+                            value={account.status === "active" ? "正常" : "待检查"}
+                            valueStyle={{ color: account.status === "active" ? "#52c41a" : "rgba(255,255,255,0.45)", fontSize: 14 }}
+                          />
+                        </Col>
+                      </Row>
+                    ) : isCreator ? (
                       <Row gutter={16} style={{ marginBottom: 12 }}>
                         <Col span={12}>
                           <Statistic
@@ -313,7 +400,21 @@ export function XhsAccountsPage() {
                       <Text style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>
                         更新时间：{formatDate(account.updated_at || account.created_at)}
                       </Text>
-                      <Space size={4}>
+                      <Space size={4} wrap>
+                        {/* 所有账号类型都可以保存凭据 */}
+                        <Button
+                          size="small"
+                          icon={<KeyOutlined />}
+                          onClick={() => handleSaveCredentials(account)}
+                        >
+                          凭据
+                        </Button>
+                        <Switch
+                          size="small"
+                          checked={account.profile?.auto_renew || false}
+                          onChange={(checked) => handleToggleAutoRenew(account, checked)}
+                          title="自动续命"
+                        />
                         <Button
                           size="small"
                           icon={isChecking ? <SyncOutlined spin /> : <ReloadOutlined />}

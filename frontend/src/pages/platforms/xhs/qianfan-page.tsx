@@ -291,6 +291,7 @@ export function QianFanPage() {
   useEffect(() => {
     fetchAccounts("xhs").then((list) => {
       setAccounts(list);
+      // 只用 PC 账号
       const pc = list.find((a) => a.sub_type === "pc");
       if (pc) setAccountId(pc.id);
     });

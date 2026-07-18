@@ -37,82 +37,80 @@ _login_result: dict[str, Any] = {}
 
 
 async def _run_browser_login(user_id: int, username: str = None, password: str = None):
-    """后台任务：打开浏览器等待登录"""
+    """后台任务：打开浏览器自动填写账号密码登录千帆"""
     global _login_result
-    
+
     chromium_path = Path.home() / "AppData" / "Local" / "ms-playwright" / "chromium-1228" / "chrome-win64" / "chrome.exe"
-    
     if not chromium_path.exists():
         _login_result[user_id] = {"status": "error", "message": "浏览器未安装，请先运行: python qianfan_login.py download"}
         return
-    
+
     try:
         from playwright.async_api import async_playwright
     except ImportError:
         _login_result[user_id] = {"status": "error", "message": "playwright 未安装"}
         return
-    
+
     try:
-        _login_result[user_id] = {"status": "pending", "message": "浏览器已打开，等待登录..."}
-        
+        _login_result[user_id] = {"status": "pending", "message": "浏览器启动中..."}
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=False,
                 executable_path=str(chromium_path),
-                args=["--start-maximized"]
+                args=["--start-maximized"],
             )
-            
             context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                viewport={"width": 1440, "height": 900},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             )
-            
             page = await context.new_page()
-            await page.goto("https://pgy.xiaohongshu.com")
-            
-            # 如果提供了账号密码，尝试自动填写
+            await page.goto("https://pgy.xiaohongshu.com", wait_until="domcontentloaded")
+
             if username and password:
-                _login_result[user_id] = {"status": "filling", "message": "正在自动填写账号密码..."}
-                
-                # 等待登录页面加载
+                _login_result[user_id] = {"status": "filling", "message": "正在打开登录窗口..."}
                 try:
-                    await page.wait_for_selector("input[placeholder*='手机']", timeout=5000)
-                    
-                    # 填写账号密码
-                    await page.fill("input[placeholder*='手机']", username)
+                    # 等首页「账号登录」按钮出现并点击
+                    await page.wait_for_selector(".login-btn_important", timeout=10000)
+                    await page.click(".login-btn_important")
+
+                    # 弹窗默认是「短信登录」tab，点击「账号登录」tab 切换
+                    await page.wait_for_selector("text=账号登录", timeout=8000)
+                    await page.click("text=账号登录")
+                    await asyncio.sleep(0.5)
+                    _login_result[user_id] = {"status": "filling", "message": "正在填写账号密码..."}
+
+                    await page.wait_for_selector("input[placeholder*='账号']", timeout=5000)
+                    await page.fill("input[placeholder*='账号']", username)
                     await page.fill("input[type='password']", password)
-                    
-                    # 点击登录按钮
-                    await page.click("button[type='submit']")
-                    
-                    _login_result[user_id] = {"status": "waiting", "message": "请在浏览器中完成验证码/扫码..."}
+                    await asyncio.sleep(0.3)
+
+                    # 点击弹窗内的登录按钮（class=login-btn，排除注册按钮）
+                    await page.locator(".login-btn").filter(has_text="登录").last.click()
+                    _login_result[user_id] = {"status": "waiting", "message": "已提交，请在浏览器中完成验证（如有）..."}
                 except Exception as e:
-                    logger.warning(f"自动填写失败，请手动登录: {e}")
-                    _login_result[user_id] = {"status": "waiting", "message": "请手动登录..."}
+                    logger.warning(f"自动填写失败，降级为手动登录: {e}")
+                    _login_result[user_id] = {"status": "waiting", "message": "自动填写失败，请在浏览器中手动登录"}
             else:
-                _login_result[user_id] = {"status": "waiting", "message": "请在浏览器中扫码登录..."}
-            
-            # 等待登录成功（最长 5 分钟）
+                _login_result[user_id] = {"status": "waiting", "message": "请在浏览器中登录千帆账号..."}
+
+            # 轮询 Cookie，最长等待 5 分钟
             for _ in range(300):
                 await asyncio.sleep(1)
                 cookies = await context.cookies()
-                
-                has_access_token = any(c["name"].startswith("access-token") for c in cookies)
-                has_session = any(c["name"] == "solar.beaker.session.id" for c in cookies)
-                
-                if has_access_token or has_session:
+                has_auth = any(
+                    c["name"].startswith("access-token") or c["name"] == "solar.beaker.session.id"
+                    for c in cookies
+                )
+                if has_auth:
                     cookie_dict = {c["name"]: c["value"] for c in cookies}
-                    _login_result[user_id] = {
-                        "status": "success",
-                        "message": "登录成功",
-                        "cookies": cookie_dict
-                    }
+                    _login_result[user_id] = {"status": "success", "message": "登录成功", "cookies": cookie_dict}
                     await browser.close()
                     return
-            
-            _login_result[user_id] = {"status": "timeout", "message": "登录超时"}
+
+            _login_result[user_id] = {"status": "timeout", "message": "登录超时，请重试"}
             await browser.close()
-            
+
     except Exception as e:
         logger.error(f"千帆登录失败: {e}")
         _login_result[user_id] = {"status": "error", "message": str(e)}

@@ -39,12 +39,12 @@ class AccountCredentialService:
             "password": password,
         }, ensure_ascii=False)
 
-        # 存储到 profile 字段
-        if not account.profile:
-            account.profile = {}
-        account.profile["credentials"] = encrypt_text(credentials)
-        account.profile["auto_renew"] = True
-        account.profile["last_renew_time"] = datetime.now().isoformat()
+        # 存储到 profile_json 字段
+        profile = json.loads(account.profile_json or "{}")
+        profile["credentials"] = encrypt_text(credentials)
+        profile["auto_renew"] = True
+        profile["last_renew_time"] = datetime.now().isoformat()
+        account.profile_json = json.dumps(profile, ensure_ascii=False)
 
         db.commit()
         db.refresh(account)
@@ -53,12 +53,11 @@ class AccountCredentialService:
 
     def get_credentials(self, account: PlatformAccount) -> dict[str, str] | None:
         """获取解密后的账号密码"""
-        if not account.profile or "credentials" not in account.profile:
+        profile = json.loads(account.profile_json or "{}")
+        if "credentials" not in profile:
             return None
-
         try:
-            encrypted = account.profile["credentials"]
-            decrypted = decrypt_text(encrypted)
+            decrypted = decrypt_text(profile["credentials"])
             return json.loads(decrypted)
         except Exception as e:
             logger.error(f"解密账号凭据失败: {e}")
@@ -146,10 +145,13 @@ class AccountCredentialService:
 
     async def check_and_renew(self, db: Session):
         """检查所有需要续命的账号"""
-        accounts = db.query(PlatformAccount).filter(
-            PlatformAccount.profile["auto_renew"].as_boolean() == True,
+        all_accounts = db.query(PlatformAccount).filter(
             PlatformAccount.status == "expired",
         ).all()
+        accounts = [
+            a for a in all_accounts
+            if json.loads(a.profile_json or "{}").get("auto_renew")
+        ]
 
         logger.info(f"检查到 {len(accounts)} 个账号需要续命")
 

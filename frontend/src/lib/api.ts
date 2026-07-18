@@ -772,10 +772,10 @@ export async function importXhsCookieAccount(payload: {
   sync_creator?: boolean;
 }): Promise<PlatformAccount> {
   if (payload.sub_type === "qianfan") {
-    const response = await http.post<PlatformAccount>("/xhs/login-sessions/qianfan/import-cookie", {
+    const response = await http.post<{ account: PlatformAccount }>("/xhs/login-sessions/qianfan/import-cookie", {
       cookie_string: payload.cookie_string,
     });
-    return response.data;
+    return response.data.account;
   }
   const response = await http.post<PlatformAccount>("/accounts/import-cookie", {
     platform: "xhs",

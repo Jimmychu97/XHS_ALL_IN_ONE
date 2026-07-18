@@ -4,67 +4,78 @@
 A full-stack, open-source platform for end-to-end Xiaohongshu (小红书) content operations. It closes the loop from data collection → content library → AI rewriting → image enhancement → scheduled publishing → automated pipeline — all in a single browser tab.
 
 ## Value Proposition
-Replaces 5+ separate tools (scrapers, Excel, ChatGPT, Photoshop, creator dashboard) with one unified platform. The only open-source project that connects the entire XHS content production chain.
+Replaces 5+ separate tools (scrapers, note apps, ChatGPT tab, image editors, creator dashboard) with one unified platform. The key differentiator is the fully automated pipeline: keyword search → AI rewrite → upload → publish, with zero manual intervention.
 
 ## Target Users
-- XHS content creators managing multiple accounts
-- Social media agencies running content pipelines at scale
-- Developers building XHS automation tools (via SDK / Skills interface)
+- Individual content creators managing XHS accounts
+- Marketing teams running multi-account XHS operations
+- Developers building XHS automation toolchains (via SDK / Skills interface)
 
-## Core Capabilities
+## Core Feature Areas
 
-### 1. Multi-Account Matrix
+### 1. Account Matrix
 - Bind multiple PC and Creator accounts
 - Three login methods: QR code, SMS verification code, Cookie import
-- Fernet-encrypted cookie storage; 2-hour automatic health check with expiry notifications
+- Fernet-encrypted cookie storage
+- Automatic 2-hour health check with expiry notifications
 
 ### 2. Note Discovery
-- Keyword search across all XHS notes with multi-dimensional filters (sort, type, date)
-- URL direct lookup; watermark-free original images and video
-- One-click save to content library; "already saved" indicator
+- Keyword search across all XHS notes
+- Multi-dimensional filters: sort, type, time range
+- Watermark-free original image/video retrieval
+- One-click save to content library
 
 ### 3. Content Library
-- Unified repository owned by platform user (not tied to any XHS account)
-- Card / list dual views; custom tags; keyword search; batch operations
-- JSON / CSV export
+- Unified repository for all collected notes (per platform user, not per XHS account)
+- Card / list dual view
+- Custom tags, keyword search, batch operations
+- Export to JSON / CSV
 
-### 4. Draft Workshop (AI Rewriting)
+### 4. Draft Workshop (草稿工坊)
 - Three-column layout: draft queue + editor + AI assistant
-- Deep-copy notes from library into drafts
 - AI one-click rewrite: body text, title polish, tag generation
-- Drag-and-drop image asset reordering; send directly to publish center
+- Drag-and-drop image asset reordering
+- Send directly to publish center
 
-### 5. Image Workshop (AI Image Enhancement)
-- Select any draft image, add reference image, enter enhancement prompt
-- AI generates optimized image and replaces in-place
-- Side-by-side comparison with click-to-enlarge preview
+### 5. Image Workshop (图片工坊)
+- AI image generation with reference image support
+- Image description generation
+- AI and regular image asset management
 
 ### 6. Publish Center
 - Preview draft content and image assets
-- Select Creator account; set visibility and publish mode (immediate / scheduled)
+- Select Creator account, set visibility and publish mode (immediate / scheduled)
 - Publish validation + one-click publish to XHS Creator platform
 
-### 7. Auto-Operations Pipeline
-- Configure keywords + schedule (daily / weekly / custom interval)
-- Fully automated: search hot notes → AI rewrite title+body → upload assets → publish via Creator API
-- True unattended operation
+### 7. Auto Operations (自动运营)
+- Configurable keyword + schedule (daily / weekly / custom interval)
+- Fully automated pipeline: search → AI rewrite → upload → publish
+- Unattended operation
 
-### 8. Additional Modules
-- Data Insights: dashboard, engagement trends, top content, hot topics, comment analysis
-- Competitor Monitoring: keyword / account / brand / URL monitoring with snapshot history
-- Task Center: full task audit, scheduler status, duration tracking
-- Notification System: real-time bell for cookie expiry and task failures
-- Model Configuration: any OpenAI-compatible API (Volcengine, Alibaba Cloud Bailian, OpenAI proxies)
+### 8. Data Insights
+- Dashboard overview, engagement trends, top content, hot topics, comment analysis
 
-## SDK Layer (apis/)
-Reverse-engineered XHS signing algorithms exposed as a transparent SDK:
-- PC platform: QR/SMS login, note search, note detail (no-watermark), comments, user profiles, home feed, unread messages
-- Creator platform: QR/SMS login, image/video upload, published works list
-- Pugongying platform: KOL list, fan profiles, collaboration invitations
-- Qianfan platform: distributor list, category/product info
+### 9. Competitor Monitoring
+- Keyword / account / brand / URL monitoring
+- Auto-crawl refresh, snapshot history
 
-## Skills Integration
-Project exposes standardized skills consumable by agent toolchains (Clawbot, Claude Code, Codex) via [XhsSkills](https://github.com/cv-cat/XhsSkills).
+### 10. Task Center & Notifications
+- Full task audit log, scheduler status, duration tracking
+- Real-time bell notifications for cookie expiry and task failures
 
-## Planned Platforms
-Douyin, Kuaishou, Weibo, Xianyu, Taobao (Coming Soon)
+### 11. Model Configuration
+- Supports any OpenAI-compatible API endpoint
+- Pre-tested with: Volcengine (火山引擎), Alibaba Cloud Bailian (阿里云百炼), OpenAI proxies
+
+## SDK / Skills Layer
+The `apis/` directory is a standalone reverse-engineered XHS SDK. It is also published as [XhsSkills](https://github.com/cv-cat/XhsSkills) for direct integration with agent toolchains (Clawbot, Claude Code, Codex, etc.).
+
+## Platform Roadmap
+| Platform | Status |
+|---|---|
+| 小红书 (XHS) | ✅ Live |
+| 抖音 / 快手 / 微博 / 闲鱼 / 淘宝 | Coming Soon |
+
+## Constraints
+- For learning and research only — commercial use is prohibited (MIT license with explicit restriction in README)
+- Requires Python 3.10+ and Node.js 20+

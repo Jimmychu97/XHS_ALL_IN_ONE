@@ -23,11 +23,15 @@ const accountTypeOptions = [
   { label: "千帆", value: "qianfan" as const },
 ];
 
-const loginMethodOptions = [
+const pcCreatorLoginMethodOptions = [
   { label: "二维码", value: "qr" as const },
   { label: "手机验证码", value: "phone" as const },
   { label: "Cookie", value: "cookie" as const },
-  { label: "浏览器登录", value: "browser" as const },
+];
+
+const qianfanLoginMethodOptions = [
+  { label: "账号密码", value: "browser" as const },
+  { label: "Cookie", value: "cookie" as const },
 ];
 
 export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerProps) {
@@ -49,22 +53,22 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
       message.warning("请输入账号和密码");
       return;
     }
-    
+
     setIsBrowserLoggingIn(true);
     setBrowserLoginStatus("正在启动浏览器...");
-    
+
     try {
       await startQianfanBrowserLogin(browserUsername, browserPassword);
-      
+
       const pollInterval = setInterval(async () => {
         try {
           const result = await pollQianfanLoginStatus();
           setBrowserLoginStatus(result.message);
-          
+
           if (result.status === "success" || result.status === "saved") {
             clearInterval(pollInterval);
             setIsBrowserLoggingIn(false);
-            message.success("账号登录成功！");
+            message.success("千帆账号登录成功！");
             onBound();
           } else if (result.status === "error" || result.status === "timeout") {
             clearInterval(pollInterval);
@@ -74,15 +78,14 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
           // 继续轮询
         }
       }, 2000);
-      
     } catch (e) {
       setIsBrowserLoggingIn(false);
       setBrowserLoginStatus("启动失败：" + String(e));
     }
   }
 
-  // 所有账号类型都支持浏览器登录，使用相同的选项
-  // qianfanLoginOptions 已移除，使用统一的 loginMethodOptions
+  const isQianfan = accountType === "qianfan";
+  const loginMethodOptions = isQianfan ? qianfanLoginMethodOptions : pcCreatorLoginMethodOptions;
 
   return (
     <Drawer
@@ -112,7 +115,7 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
           onChange={(val) => {
             const t = val as AccountType;
             setAccountType(t);
-            if (t === "qianfan") setMethod("browser");
+            setMethod(t === "qianfan" ? "browser" : "qr");
           }}
         />
       </div>
@@ -135,14 +138,14 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
           <Alert
             type="info"
             showIcon
-            message={accountType === "qianfan" ? "千帆浏览器自动登录" : "浏览器自动登录"}
-            description="输入账号密码后，系统将自动打开浏览器完成登录，Cookie 会自动保存。"
+            message="千帆账号密码登录"
+            description="输入千帆平台账号密码，系统将自动打开浏览器完成登录并保存 Cookie。需要已安装 Playwright 浏览器。"
             style={{ marginBottom: 16 }}
           />
           <div style={{ marginBottom: 12 }}>
             <Input
               prefix={<UserOutlined />}
-              placeholder="账号/用户名"
+              placeholder="手机号 / 账号"
               value={browserUsername}
               onChange={(e) => setBrowserUsername(e.target.value)}
               style={{ marginBottom: 8 }}
@@ -154,6 +157,14 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
               onChange={(e) => setBrowserPassword(e.target.value)}
             />
           </div>
+          {browserLoginStatus && !isBrowserLoggingIn && (
+            <Alert
+              type={browserLoginStatus.startsWith("启动失败") ? "error" : "warning"}
+              message={browserLoginStatus}
+              showIcon
+              style={{ marginBottom: 12 }}
+            />
+          )}
           <Button
             type="primary"
             block
@@ -163,7 +174,7 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
             loading={isBrowserLoggingIn}
             disabled={!browserUsername || !browserPassword}
           >
-            {isBrowserLoggingIn ? browserLoginStatus : "打开浏览器登录"}
+            {isBrowserLoggingIn ? browserLoginStatus || "登录中..." : "打开浏览器登录"}
           </Button>
         </div>
       ) : (

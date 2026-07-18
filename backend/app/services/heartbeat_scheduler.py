@@ -35,7 +35,8 @@ class AccountHeartbeatScheduler:
         }
 
         # 检查是否开启自动续命
-        if not account.profile or not account.profile.get("auto_renew"):
+        profile = json.loads(account.profile_json or "{}")
+        if not profile.get("auto_renew"):
             result["action"] = "skipped"
             return result
 
@@ -80,9 +81,9 @@ class AccountHeartbeatScheduler:
 
             # 更新状态为 active
             account.status = "active"
-            if not account.profile:
-                account.profile = {}
-            account.profile["last_renew_time"] = datetime.now().isoformat()
+            profile = json.loads(account.profile_json or "{}")
+            profile["last_renew_time"] = datetime.now().isoformat()
+            account.profile_json = json.dumps(profile, ensure_ascii=False)
             db.commit()
 
             result["action"] = "renewed"
@@ -90,9 +91,9 @@ class AccountHeartbeatScheduler:
         else:
             # 续命失败，更新状态
             account.status = "expired"
-            if not account.profile:
-                account.profile = {}
-            account.profile["renew_error"] = renew_result.get("message", "未知错误")
+            profile = json.loads(account.profile_json or "{}")
+            profile["renew_error"] = renew_result.get("message", "未知错误")
+            account.profile_json = json.dumps(profile, ensure_ascii=False)
             db.commit()
 
             result["action"] = "failed"
@@ -106,12 +107,12 @@ class AccountHeartbeatScheduler:
         logger.info("开始账号心跳检测...")
 
         with SessionLocal() as db:
-            # 查询所有开启自动续命的账号
-            accounts = db.scalars(
-                select(PlatformAccount).where(
-                    PlatformAccount.profile["auto_renew"].as_boolean() == True
-                )
-            ).all()
+            # 查询所有账号，在 Python 层过滤 auto_renew
+            all_accounts = db.scalars(select(PlatformAccount)).all()
+            accounts = [
+                a for a in all_accounts
+                if json.loads(a.profile_json or "{}").get("auto_renew")
+            ]
 
             logger.info(f"检测到 {len(accounts)} 个账号开启自动续命")
 

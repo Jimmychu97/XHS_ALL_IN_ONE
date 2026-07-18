@@ -229,9 +229,87 @@ def check_account(
     return serialize_account(account)
 
 
-@router.patch("/{account_id}")
-def update_account(account_id: int):
-    return {"id": account_id, "status": "updated"}
+@router.post("/{account_id}/toggle-auto-renew")
+def toggle_auto_renew(
+    account_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    account = db.get(PlatformAccount, account_id)
+    if account is None or account.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    profile = json.loads(account.profile_json or "{}")
+    profile["auto_renew"] = not profile.get("auto_renew", False)
+    account.profile_json = json.dumps(profile, ensure_ascii=False)
+    db.commit()
+    return {"id": account_id, "auto_renew": profile["auto_renew"]}
+
+
+@router.post("/{account_id}/renew")
+def renew_account(
+    account_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    import asyncio
+    from backend.app.services.credential_service import credential_service
+    from backend.app.services.account_service import upsert_platform_account_from_login
+
+    account = db.get(PlatformAccount, account_id)
+    if account is None or account.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    result = asyncio.run(credential_service.renew_cookie(account))
+    if not result["success"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
+
+    cookies_text = json.dumps(result["cookies"], ensure_ascii=False, separators=(",", ":"))
+    upsert_platform_account_from_login(
+        db=db,
+        user_id=current_user.id,
+        platform=account.platform,
+        sub_type=account.sub_type or "pc",
+        user_info={"user_id": account.external_user_id, "nickname": account.nickname},
+        cookies_text=cookies_text,
+    )
+    db.commit()
+    db.refresh(account)
+    return {"success": True, "message": result["message"]}
+
+
+@router.get("/{account_id}/credentials")
+def get_credentials_status(
+    account_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from backend.app.services.credential_service import credential_service
+    account = db.get(PlatformAccount, account_id)
+    if account is None or account.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    profile = json.loads(account.profile_json or "{}")
+    has_credentials = credential_service.get_credentials(account) is not None
+    return {"id": account_id, "has_credentials": has_credentials, "auto_renew": profile.get("auto_renew", False)}
+
+
+@router.post("/{account_id}/credentials")
+def save_credentials(
+    account_id: int,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from backend.app.services.credential_service import credential_service
+    account = db.get(PlatformAccount, account_id)
+    if account is None or account.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    username = payload.get("username", "")
+    password = payload.get("password", "")
+    if not username or not password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="username and password required")
+    credential_service.save_credentials(db=db, account_id=account_id, username=username, password=password)
+    return {"id": account_id, "message": "credentials saved"}
+
 
 
 @router.delete("/{account_id}")

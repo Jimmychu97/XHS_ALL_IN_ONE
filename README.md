@@ -108,6 +108,7 @@
 | | 查看已发布作品列表 | ✅ |
 | **蒲公英平台** | KOL 博主列表 & 粉丝画像 & 合作邀请 | ✅ |
 | **千帆平台** | 分销商列表 & 合作品类 / 商品信息 | ✅ |
+| **千帆客服工作台** | 会话列表、消息历史、实时数据、AI 建议回复 | ✅ |
 
 ### Web 运营平台
 
@@ -187,6 +188,102 @@ docker compose up -d
 
 ---
 
+## 💬 千帆客服工作台 SDK
+
+千帆客服工作台（`walle.xiaohongshu.com`）采用 Electron 打包，登录凭证由底层自动注入。项目通过逆向分析，实现了完整的凭证保活和接口调用方案。
+
+### 前置条件
+
+1. 下载并安装千帆客服工作台（安装目录建议 `F:\eva`）
+2. 安装依赖：
+
+```bash
+npm install -g @electron/asar
+pip install websockets
+```
+
+### 第一步：开启客服工作台调试模式（仅首次需要）
+
+修改 Electron 应用开启远程调试端口：
+
+```bash
+# 解包
+asar extract F:\eva\resources\app.asar F:\eva\resources\app-unpacked
+```
+
+在 `F:\eva\resources\app-unpacked\main\window\main.cjs` 的 `initCommandLine()` 方法开头加一行：
+
+```js
+app.commandLine.appendSwitch('remote-debugging-port', '9222')
+```
+
+重新打包：
+
+```bash
+asar pack F:\eva\resources\app-unpacked F:\eva\resources\app.asar
+```
+
+### 第二步：启动凭证保活服务
+
+客服工作台必须保持运行（本来就要开着接客服）。在另一个终端启动保活脚本：
+
+```bash
+python F:\eva\cookie_watcher.py
+```
+
+该脚本会：
+- 自动连接客服工作台调试端口
+- 实时监听 token 刷新事件
+- 每 30 秒自动保存最新凭证到本地文件
+
+| 文件 | 内容 |
+|---|---|
+| `F:\eva\eva_cookies.json` | walle 接口凭证（AT-xxx token） |
+| `F:\eva\edith_auth.json` | edith 接口凭证（a1:xxx token） |
+
+> `edith_auth.json` 在工作台有任意会话请求时自动更新，无需手动操作。
+
+### 第三步：调用 SDK
+
+```python
+from apis.xhs_walle_eva_apis import WalleEvaAPI
+
+api = WalleEvaAPI()
+
+# 获取客服信息
+success, msg, res = api.get_csa_info()
+
+# 实时数据（回复率、排队数等）
+success, msg, res = api.get_realtime_data()
+
+# 会话列表
+success, msg, res = api.get_conv_list()
+
+# 单个会话消息历史
+success, msg, res = api.get_message_list(app_cid="$3$...")
+
+# 批量获取多个会话最新消息
+success, msg, res = api.get_message_list_batch(app_cids=["$3$...", "$3$..."])
+
+# AI 建议回复
+success, msg, res = api.get_bot_suggest(im_chat_id="$3$...")
+```
+
+### 工作原理
+
+```
+千帆客服工作台（常驻运行）
+    ↓ CDP 远程调试协议（端口 9222）
+cookie_watcher.py
+    ↓ 实时更新
+eva_cookies.json  ←  walle 接口（通过页面自身签名函数发请求）
+edith_auth.json   ←  edith 接口（捕获 Electron 底层注入的 a1: token）
+    ↓ 读取
+WalleEvaAPI（直接调用接口）
+```
+
+---
+
 ## 📁 项目结构
 
 ```
@@ -215,6 +312,108 @@ XHS_ALL_IN_ONE/
 ├── Dockerfile                      # 多阶段构建
 └── docker-compose.yml              # 编排文件
 ```
+
+---
+
+## 🗄️ 数据库表结构
+
+默认使用 SQLite（`./data/spider_xhs.db`），生产环境可切换 MySQL。共 25 张表，按功能分组如下。
+
+### 用户与认证
+
+| 表名 | 说明 |
+|---|---|
+| `users` | 平台用户账号，存储用户名和密码哈希，所有资源均以 `user_id` 隔离 |
+| `login_sessions` | XHS 登录会话，记录扫码/短信登录的中间状态（二维码 ID、临时 Cookie、登录方式）|
+
+### 账号管理
+
+| 表名 | 说明 |
+|---|---|
+| `platform_accounts` | 绑定的 XHS 账号（PC 端 / 创作者端），存储昵称、头像、健康状态 |
+| `account_cookie_versions` | 账号 Cookie 历史版本，Fernet 加密存储，支持多版本回溯 |
+
+### 内容库
+
+| 表名 | 说明 |
+|---|---|
+| `notes` | 采集到的小红书笔记，含标题、正文、作者、原始 JSON |
+| `note_assets` | 笔记附属图片/视频资源，记录原始 URL 和本地下载路径 |
+| `note_comments` | 笔记评论，含评论 ID、用户、内容、点赞数、父评论 ID |
+| `tags` | 用户自定义标签，用于内容库分类筛选 |
+| `note_tags` | 笔记与标签的多对多关联表 |
+| `keyword_groups` | 关键词分组，用于搜索采集和自动运营任务 |
+
+### 草稿与 AI
+
+| 表名 | 说明 |
+|---|---|
+| `ai_drafts` | 草稿工坊中的笔记草稿，含 AI 改写后的标题、正文、标签 |
+| `draft_assets` | 草稿关联的图片素材，支持拖拽排序（`sort_order`）|
+| `ai_generated_assets` | AI 生成的图片资产，记录 prompt、模型名称和本地文件路径 |
+| `model_configs` | OpenAI 兼容 API 配置，API Key Fernet 加密存储，支持多模型切换 |
+
+### 发布
+
+| 表名 | 说明 |
+|---|---|
+| `publish_jobs` | 发布任务队列，记录发布模式（立即/定时）、状态、错误信息、发布时间 |
+| `publish_assets` | 发布任务关联的图片/视频，记录上传状态和创作者平台返回的 media_id |
+
+### 自动运营
+
+| 表名 | 说明 |
+|---|---|
+| `auto_tasks` | 自动运营任务配置，含关键词、调度频率、绑定账号、上次/下次执行时间 |
+
+### 竞品监控
+
+| 表名 | 说明 |
+|---|---|
+| `monitoring_targets` | 监控目标（关键词/账号/品牌/URL），记录爬取间隔和连续失败次数 |
+| `monitoring_snapshots` | 监控快照历史，每次爬取结果以 JSON 存储，支持历史对比 |
+
+### 千帆客服工作台
+
+| 表名 | 说明 |
+|---|---|
+| `walle_conversations` | 客服会话列表，记录买家昵称、会话 ID（`app_cid`）、最后消息时间 |
+| `walle_messages` | 会话消息记录，含发送方类型（`customer`/`csa`/`bot`）、消息内容、消息时间 |
+| `walle_knowledge_base` | 知识库条目，含问题、答案、分类，用于客服快捷回复 |
+| `walle_transfer_keywords` | 转人工关键词配置，匹配买家消息后自动触发转人工流程 |
+| `walle_redemption_records` | 核销记录，记录订单核销操作、核销时间和操作客服 |
+
+### 系统
+
+| 表名 | 说明 |
+|---|---|
+| `tasks` | 全量任务审计日志，记录任务类型、状态、进度、耗时、重试次数 |
+| `notifications` | 站内通知，含标题、正文、级别（`info`/`warning`/`error`）、已读状态 |
+| `api_logs` | API 调用日志，记录平台、接口路径、状态，用于排查接口异常 |
+| `alembic_version` | Alembic 数据库迁移版本记录（系统内部使用）|
+
+---
+
+## 📋 更新日志
+
+### 千帆客服工作台 Web 管理模块（前后端完整实现）
+
+**后端** (`backend/app/api/walle.py`)
+- 新增完整 REST API，覆盖账号管理、会话管理、知识库、转人工关键词、核销记录 5 个资源
+- 实现 `_resolve_account(db, user_id, b_user_id)` — 按 `external_user_id` 匹配多租户店铺账号
+- 实现 `POST /walle/push` 消息推送接口，从 `bUserId` 字段路由到正确账号，自动 upsert 会话和消息
+- 内存日志总线（`_log_store` + `_log_subscribers`），支持多客户端并发订阅
+- 新增 `GET /walle/logs/stream` SSE 接口，支持 query param `token` 鉴权（兼容 EventSource 无法设置 Header 的限制）
+
+**`cookie_watcher.py`** (`F:\eva\cookie_watcher.py`)
+- 改造为完整消息捕获服务，监听 CDP WebSocket 帧
+- `_handle_sync_item()` 处理 `type=30001` 的 `sync/unreliable` 帧，识别买家/客服/机器人消息
+- 从 cookie 提取全局 `_walle_b_user_id`（`walle-eva-bUserId`），随每条消息推送到后端实现多店路由
+- 同时捕获 `edith.xiaohongshu.com/api/impaas/message/user/list/batch` 响应，补全历史消息
+
+**前端** (`frontend/src/pages/platforms/xhs/walle/`)
+- `walle-page.tsx` — 6 个 Tab 主页面：账号管理、会话管理、知识库、转人工关键词、核销记录、实时日志
+- `walle-logs.tsx` — SSE 实时日志面板，黑色终端风格，支持暂停/清空，用 `getAccessToken()` 获取 token
 
 ---
 

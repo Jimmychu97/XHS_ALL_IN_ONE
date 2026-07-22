@@ -10,6 +10,7 @@ from backend.app.models.platform_account import AccountCookieVersion, PlatformAc
 from backend.app.models.publish import PublishAsset, PublishJob
 from backend.app.models.task import Task
 from backend.app.models.user import User
+from backend.app.models.walle import WalleAgentSession, WalleConversation, WalleKeyword, WalleKnowledge, WalleMessage, WalleOrder, WalleShopConfig
 
 __all__ = [
     "AccountCookieVersion",
@@ -34,5 +35,12 @@ __all__ = [
     "Tag",
     "Task",
     "User",
+    "WalleAgentSession",
+    "WalleConversation",
+    "WalleKeyword",
+    "WalleKnowledge",
+    "WalleMessage",
+    "WalleOrder",
+    "WalleShopConfig",
     "note_tags",
 ]

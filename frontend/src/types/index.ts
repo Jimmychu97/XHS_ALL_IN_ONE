@@ -704,6 +704,87 @@ export type AutoTaskRunResult = {
   };
 };
 
+// ── Walle 千帆客服 ──────────────────────────────────────────
+export type WalleShopConfig = {
+  id?: number;
+  platform_account_id: number;
+  ai_enabled: boolean;
+  auto_send: boolean;
+  model_config_id: number | null;
+  system_prompt: string;
+};
+
+export type WalleConversation = {
+  id: number;
+  app_cid: string;
+  im_chat_id: string | null;
+  platform_account_id: number;
+  customer_name: string;
+  customer_id: string | null;
+  status: "open" | "replied" | "closed" | string;
+  unread_count: number;
+  last_msg_content: string;
+  last_msg_time: string | null;
+  ai_suggestion: string | null;
+  updated_at: string;
+};
+
+export type WalleMessage = {
+  id: number;
+  msg_id: string;
+  app_cid: string;
+  sender_type: "customer" | "csa" | "bot" | string;
+  sender_id: string | null;
+  content_type: string;
+  content: string;
+  msg_time: string | null;
+};
+
+export type WalleKnowledge = {
+  id: number;
+  platform_account_id: number;
+  title: string;
+  content: string;
+  tags: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WalleKnowledgePayload = {
+  title: string;
+  content: string;
+  tags?: string;
+  enabled?: boolean;
+};
+
+export type WalleKeyword = {
+  id: number;
+  platform_account_id: number;
+  keyword: string;
+};
+
+export type WalleOrder = {
+  id: number;
+  app_cid: string;
+  sn_imei: string;
+  coupon_code: string;
+  goods_name: string | null;
+  spec: string | null;
+  order_sn: string | null;
+  status: 0 | 1 | 2 | 3 | number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WalleSyncResult = {
+  success: boolean;
+  msg?: string;
+  conversations: number;
+  messages: number;
+};
+
+// ── AppNotification ──────────────────────────────────────────
 export type AppNotification = {
   id: number;
   title: string;

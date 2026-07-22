@@ -1,9 +1,9 @@
 import { Alert, Button, Drawer, Input, Segmented, message } from "antd";
 import { useState } from "react";
-import { ChromeOutlined, LockOutlined, UserOutlined } from "@ant-design/icons";
+import { ImportOutlined } from "@ant-design/icons";
 
 import type { PlatformAccount } from "../../types";
-import { startQianfanBrowserLogin, pollQianfanLoginStatus } from "../../lib/api";
+import { importWalleEvaAccount } from "../../lib/api";
 import { CookieImportPanel } from "./cookie-import-panel";
 import { PhoneLoginPanel } from "./phone-login-panel";
 import { QrLoginPanel } from "./qr-login-panel";
@@ -14,13 +14,14 @@ type AddAccountDrawerProps = {
   onBound: () => void;
 };
 
-type AccountType = "pc" | "creator" | "qianfan";
-type LoginMethod = "qr" | "phone" | "cookie" | "browser";
+type AccountType = "pc" | "creator" | "qianfan" | "walle";
+type LoginMethod = "qr" | "phone" | "cookie" | "eva";
 
 const accountTypeOptions = [
   { label: "PC", value: "pc" as const },
   { label: "Creator", value: "creator" as const },
   { label: "千帆", value: "qianfan" as const },
+  { label: "千帆客服", value: "walle" as const },
 ];
 
 const pcCreatorLoginMethodOptions = [
@@ -30,17 +31,18 @@ const pcCreatorLoginMethodOptions = [
 ];
 
 const qianfanLoginMethodOptions = [
-  { label: "账号密码", value: "browser" as const },
   { label: "Cookie", value: "cookie" as const },
+];
+
+const walleLoginMethodOptions = [
+  { label: "导入凭证文件", value: "eva" as const },
 ];
 
 export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerProps) {
   const [accountType, setAccountType] = useState<AccountType>("pc");
   const [method, setMethod] = useState<LoginMethod>("qr");
-  const [browserLoginStatus, setBrowserLoginStatus] = useState<string>("");
-  const [isBrowserLoggingIn, setIsBrowserLoggingIn] = useState(false);
-  const [browserUsername, setBrowserUsername] = useState("");
-  const [browserPassword, setBrowserPassword] = useState("");
+  const [evaPath, setEvaPath] = useState(String.raw`F:\eva\eva_cookies.json`);
+  const [importing, setImporting] = useState(false);
 
   function handleConfirmed(account: PlatformAccount) {
     const actionText = account.action === "updated" ? "已更新到账号矩阵" : "已加入账号矩阵";
@@ -48,44 +50,25 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
     onBound();
   }
 
-  async function handleBrowserLogin() {
-    if (!browserUsername || !browserPassword) {
-      message.warning("请输入账号和密码");
-      return;
-    }
-
-    setIsBrowserLoggingIn(true);
-    setBrowserLoginStatus("正在启动浏览器...");
-
+  async function handleImportEva() {
+    setImporting(true);
     try {
-      await startQianfanBrowserLogin(browserUsername, browserPassword);
-
-      const pollInterval = setInterval(async () => {
-        try {
-          const result = await pollQianfanLoginStatus();
-          setBrowserLoginStatus(result.message);
-
-          if (result.status === "success" || result.status === "saved") {
-            clearInterval(pollInterval);
-            setIsBrowserLoggingIn(false);
-            message.success("千帆账号登录成功！");
-            onBound();
-          } else if (result.status === "error" || result.status === "timeout") {
-            clearInterval(pollInterval);
-            setIsBrowserLoggingIn(false);
-          }
-        } catch {
-          // 继续轮询
-        }
-      }, 2000);
-    } catch (e) {
-      setIsBrowserLoggingIn(false);
-      setBrowserLoginStatus("启动失败：" + String(e));
+      const account = await importWalleEvaAccount(evaPath);
+      handleConfirmed(account as PlatformAccount & { action?: string });
+    } catch {
+      message.error("导入失败，请确认 cookie_watcher.py 已运行且文件存在");
+    } finally {
+      setImporting(false);
     }
   }
 
+  const isWalle = accountType === "walle";
   const isQianfan = accountType === "qianfan";
-  const loginMethodOptions = isQianfan ? qianfanLoginMethodOptions : pcCreatorLoginMethodOptions;
+  const loginMethodOptions = isWalle
+    ? walleLoginMethodOptions
+    : isQianfan
+    ? qianfanLoginMethodOptions
+    : pcCreatorLoginMethodOptions;
 
   return (
     <Drawer
@@ -115,7 +98,7 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
           onChange={(val) => {
             const t = val as AccountType;
             setAccountType(t);
-            setMethod(t === "qianfan" ? "browser" : "qr");
+            setMethod(t === "walle" ? "eva" : t === "qianfan" ? "cookie" : "qr");
           }}
         />
       </div>
@@ -129,54 +112,41 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
         />
       </div>
 
-      {method === "qr" ? (
-        <QrLoginPanel accountType={accountType as "pc" | "creator"} onConfirmed={handleConfirmed} />
-      ) : method === "cookie" ? (
-        <CookieImportPanel accountType={accountType} onImported={handleConfirmed} />
-      ) : method === "browser" ? (
+      {method === "eva" ? (
         <div>
           <Alert
             type="info"
             showIcon
-            message="千帆账号密码登录"
-            description="输入千帆平台账号密码，系统将自动打开浏览器完成登录并保存 Cookie。需要已安装 Playwright 浏览器。"
+            message="千帆客服工作台凭证导入"
+            description={
+              <span>
+                请先运行保活脚本：<br />
+                <code>python F:\eva\cookie_watcher.py</code><br />
+                脚本会自动将凭证写入 eva_cookies.json，然后点击下方按钮导入。
+              </span>
+            }
             style={{ marginBottom: 16 }}
           />
-          <div style={{ marginBottom: 12 }}>
-            <Input
-              prefix={<UserOutlined />}
-              placeholder="手机号 / 账号"
-              value={browserUsername}
-              onChange={(e) => setBrowserUsername(e.target.value)}
-              style={{ marginBottom: 8 }}
-            />
-            <Input.Password
-              prefix={<LockOutlined />}
-              placeholder="密码"
-              value={browserPassword}
-              onChange={(e) => setBrowserPassword(e.target.value)}
-            />
-          </div>
-          {browserLoginStatus && !isBrowserLoggingIn && (
-            <Alert
-              type={browserLoginStatus.startsWith("启动失败") ? "error" : "warning"}
-              message={browserLoginStatus}
-              showIcon
-              style={{ marginBottom: 12 }}
-            />
-          )}
+          <Input
+            value={evaPath}
+            onChange={(e) => setEvaPath(e.target.value)}
+            placeholder={String.raw`F:\eva\eva_cookies.json`}
+            style={{ marginBottom: 12 }}
+          />
           <Button
             type="primary"
             block
-            size="large"
-            icon={<ChromeOutlined />}
-            onClick={handleBrowserLogin}
-            loading={isBrowserLoggingIn}
-            disabled={!browserUsername || !browserPassword}
+            icon={<ImportOutlined />}
+            loading={importing}
+            onClick={handleImportEva}
           >
-            {isBrowserLoggingIn ? browserLoginStatus || "登录中..." : "打开浏览器登录"}
+            {importing ? "导入中..." : "读取凭证并绑定账号"}
           </Button>
         </div>
+      ) : method === "qr" ? (
+        <QrLoginPanel accountType={accountType as "pc" | "creator"} onConfirmed={handleConfirmed} />
+      ) : method === "cookie" ? (
+        <CookieImportPanel accountType={accountType as "pc" | "creator" | "qianfan"} onImported={handleConfirmed} />
       ) : (
         <PhoneLoginPanel accountType={accountType as "pc" | "creator"} onConfirmed={handleConfirmed} />
       )}

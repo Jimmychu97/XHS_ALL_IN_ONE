@@ -3,6 +3,7 @@ import {
   BarChartOutlined,
   BellOutlined,
   CloudDownloadOutlined,
+  CustomerServiceOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   FileTextOutlined,
@@ -67,6 +68,7 @@ const mainNavItems: MenuProps["items"] = [
   { key: "/platforms/xhs/publish", icon: <SendOutlined />, label: "发布中心" },
   { key: "/platforms/xhs/auto-ops", icon: <ThunderboltOutlined />, label: "自动运营" },
   { key: "/platforms/xhs/qianfan", icon: <ShopOutlined />, label: "千帆平台" },
+  { key: "/platforms/xhs/walle",   icon: <CustomerServiceOutlined />, label: "千帆客服" },
 ];
 
 const footerNavItems: MenuProps["items"] = [

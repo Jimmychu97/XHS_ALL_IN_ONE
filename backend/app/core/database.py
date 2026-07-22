@@ -39,6 +39,7 @@ def init_db(bind=engine) -> None:
     _run_alembic_migrations()
     _normalize_model_config_names(bind)
     _normalize_sqlite_datetime_storage(bind)
+    _add_walle_shop_config_columns(bind)
 
 
 def _run_alembic_migrations() -> None:
@@ -147,6 +148,24 @@ def _normalize_sqlite_datetime_storage(bind) -> None:
                 text("UPDATE publish_jobs SET scheduled_at = datetime(scheduled_at, '+8 hours') WHERE scheduled_at IS NOT NULL")
             )
         connection.execute(text("INSERT INTO app_migrations (name) VALUES ('sqlite_publish_scheduled_at_asia_shanghai_v1')"))
+
+
+def _add_walle_shop_config_columns(bind) -> None:
+    """给 walle_shop_configs 表补加 instructions/gsx_* 列（已有则跳过）"""
+    inspector = inspect(bind)
+    if "walle_shop_configs" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("walle_shop_configs")}
+    with bind.begin() as conn:
+        for col, ddl in [
+            ("instructions",          "ALTER TABLE walle_shop_configs ADD COLUMN instructions TEXT"),
+            ("gsx_appid",             "ALTER TABLE walle_shop_configs ADD COLUMN gsx_appid VARCHAR(128)"),
+            ("gsx_secret",            "ALTER TABLE walle_shop_configs ADD COLUMN gsx_secret VARCHAR(256)"),
+            ("gsx_key",               "ALTER TABLE walle_shop_configs ADD COLUMN gsx_key VARCHAR(64)"),
+            ("vision_model_config_id","ALTER TABLE walle_shop_configs ADD COLUMN vision_model_config_id INTEGER REFERENCES model_configs(id)"),
+        ]:
+            if col not in existing:
+                conn.execute(text(ddl))
 
 
 def get_db():

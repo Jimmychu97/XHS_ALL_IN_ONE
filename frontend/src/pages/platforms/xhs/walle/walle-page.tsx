@@ -1,9 +1,10 @@
-import { CustomerServiceOutlined, FileTextOutlined, KeyOutlined, ReadOutlined, SettingOutlined, ShoppingOutlined, TeamOutlined } from "@ant-design/icons";
+import { CustomerServiceOutlined, FileTextOutlined, FolderOpenOutlined, KeyOutlined, ReadOutlined, SettingOutlined, ShoppingOutlined, TeamOutlined } from "@ant-design/icons";
 import { Layout, Menu } from "antd";
 import type { MenuProps } from "antd";
 import { useState } from "react";
 import { WalleAccountsTab } from "./walle-accounts";
 import { WalleConversationsTab } from "./walle-conversations";
+import { WalleEvaConfigTab } from "./walle-eva-config";
 import { WalleKnowledgeTab } from "./walle-knowledge";
 import { WalleKeywordsTab } from "./walle-keywords";
 import { WalleLogsTab } from "./walle-logs";
@@ -12,7 +13,7 @@ import { WalleShopConfigTab } from "./walle-shop-config";
 
 const { Sider, Content } = Layout;
 
-type TabKey = "accounts" | "conversations" | "knowledge" | "keywords" | "orders" | "logs" | "shop-config";
+type TabKey = "accounts" | "conversations" | "knowledge" | "keywords" | "orders" | "logs" | "shop-config" | "eva-config";
 
 const menuItems: MenuProps["items"] = [
   { key: "accounts",      icon: <TeamOutlined />,           label: "账号管理" },
@@ -22,6 +23,7 @@ const menuItems: MenuProps["items"] = [
   { key: "orders",        icon: <ShoppingOutlined />,        label: "核销记录" },
   { key: "logs",          icon: <FileTextOutlined />,        label: "实时日志" },
   { key: "shop-config",   icon: <SettingOutlined />,         label: "AI 配置" },
+  { key: "eva-config",    icon: <FolderOpenOutlined />,      label: "EVA 设置" },
 ];
 
 export function WallePage() {
@@ -54,6 +56,7 @@ export function WallePage() {
         {tab === "orders"        && <WalleOrdersTab />}
         {tab === "logs"          && <WalleLogsTab />}
         {tab === "shop-config"   && <WalleShopConfigTab />}
+        {tab === "eva-config"    && <WalleEvaConfigTab />}
       </Content>
     </Layout>
   );

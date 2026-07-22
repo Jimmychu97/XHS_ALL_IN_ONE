@@ -1,21 +1,25 @@
-import { Button, Form, Input, Select, Space, Switch, message } from "antd";
+import { Button, Form, Input, Select, Space, Switch, App } from "antd";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../../../../components/layout/app-shell";
 import {
-  fetchAccounts, fetchWalleShopConfig, upsertWalleShopConfig,
+  fetchWalleAccounts, fetchWalleShopConfig, upsertWalleShopConfig,
 } from "../../../../lib/api";
 import type { PlatformAccount } from "../../../../types";
 
+const DEFAULT_PERSONA = `你是一名专业的手机验机客服，负责帮助买家完成序列号核销和验机报告解读。
+请用简洁、友好的语言回复买家，遇到不确定的问题先查知识库再回答。`;
+
 export function WalleShopConfigTab() {
+  const { message } = App.useApp();
   const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
   const [accountId, setAccountId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
   useEffect(() => {
-    fetchAccounts("xhs").then((list) => {
-      setAccounts(list);
-      if (list[0]) setAccountId(list[0].id);
+    fetchWalleAccounts().then((res) => {
+      setAccounts(res.items);
+      if (res.items[0]) setAccountId(res.items[0].id);
     });
   }, []);
 
@@ -74,16 +78,27 @@ export function WalleShopConfigTab() {
         <Form.Item name="auto_send" label="自动发送（关闭则仅生成建议，不自动发送）" valuePropName="checked">
           <Switch />
         </Form.Item>
-        <Form.Item name="system_prompt" label="客服人设 Prompt">
+        <Form.Item
+          name="system_prompt"
+          label="客服人设 Prompt"
+          extra="留空则使用默认人设。此处只需填写角色定位，行为规则和工具说明由系统自动附加。"
+        >
           <Input.TextArea
             rows={8}
-            placeholder="例如：你是一名专业的手机验机客服，负责帮助买家完成序列号核销和验机报告解读..."
+            placeholder={DEFAULT_PERSONA}
           />
         </Form.Item>
         <Form.Item>
-          <Button type="primary" loading={saving} onClick={() => void handleSave()}>
-            保存配置
-          </Button>
+          <Space>
+            <Button type="primary" loading={saving} onClick={() => void handleSave()}>
+              保存配置
+            </Button>
+            <Button
+              onClick={() => form.setFieldValue("system_prompt", DEFAULT_PERSONA)}
+            >
+              填入默认人设
+            </Button>
+          </Space>
         </Form.Item>
       </Form>
     </div>

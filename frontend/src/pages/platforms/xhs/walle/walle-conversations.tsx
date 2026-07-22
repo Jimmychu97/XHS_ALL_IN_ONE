@@ -2,10 +2,10 @@ import { RobotOutlined, SyncOutlined, UserOutlined } from "@ant-design/icons";
 import {
   Avatar, Badge, Button, Empty, List, Select, Space, Spin, Tag, Typography, message,
 } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "../../../../components/layout/app-shell";
 import {
-  fetchAccounts, fetchWalleConversations, fetchWalleMessages,
+  fetchWalleAccounts, fetchWalleConversations, fetchWalleMessages,
   updateWalleConversationStatus, walleAiSuggest, walleSync,
 } from "../../../../lib/api";
 import type { PlatformAccount, WalleConversation, WalleMessage } from "../../../../types";
@@ -36,11 +36,25 @@ export function WalleConversationsTab() {
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestion, setSuggestion] = useState("");
+  const msgBottomRef = useRef<HTMLDivElement>(null);
+  // 是否正在等待 AI 回复（最新一条是买家消息时开启轮询）
+  const [waitingBot, setWaitingBot] = useState(false);
+
+  // 消息更新后滚动到底部
+  useEffect(() => {
+    msgBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    // 最新一条是买家消息→开始转轮询；是 bot →停止
+    if (messages.length > 0) {
+      const last = messages[messages.length - 1];
+      if (last.sender_type === "customer") setWaitingBot(true);
+      else if (last.sender_type === "bot") setWaitingBot(false);
+    }
+  }, [messages]);
 
   useEffect(() => {
-    fetchAccounts("xhs").then((list) => {
-      setAccounts(list);
-      const first = list[0];
+    fetchWalleAccounts().then((res) => {
+      setAccounts(res.items);
+      const first = res.items[0];
       if (first) setAccountId(first.id);
     });
   }, []);
@@ -72,6 +86,7 @@ export function WalleConversationsTab() {
   const handleSelectConv = async (conv: WalleConversation) => {
     setSelected(conv);
     setSuggestion("");
+    setWaitingBot(false);
     setLoadingMsgs(true);
     try {
       const res = await fetchWalleMessages(conv.id, { page_size: 100 });
@@ -80,6 +95,16 @@ export function WalleConversationsTab() {
       setLoadingMsgs(false);
     }
   };
+
+  // waitingBot=true 时每 2s 轮询，收到 bot 回复后停止
+  useEffect(() => {
+    if (!selected || !waitingBot) return;
+    const timer = setInterval(async () => {
+      const res = await fetchWalleMessages(selected.id, { page_size: 100 }).catch(() => null);
+      if (res) setMessages(res.items);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [selected?.id, waitingBot]);
 
   const handleAiSuggest = async () => {
     if (!selected) return;
@@ -240,6 +265,7 @@ export function WalleConversationsTab() {
                     </div>
                   ))
                 )}
+                <div ref={msgBottomRef} />
               </div>
 
               {/* AI 建议区 */}

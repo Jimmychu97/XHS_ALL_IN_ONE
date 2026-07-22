@@ -70,7 +70,7 @@ export function WalleAccountsTab() {
       <Alert
         type="info"
         showIcon
-        message="使用前请先启动保活脚本"
+        title="使用前请先启动保活脚本"
         description={<code>python F:\eva\cookie_watcher.py</code>}
         style={{ marginBottom: 24 }}
       />

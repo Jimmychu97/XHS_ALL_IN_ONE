@@ -1,9 +1,10 @@
 """
 统一 watcher：维护 walle cookie、edith token，实时同步消息到后端
-用法: python F:/eva/cookie_watcher.py
+用法: python cookie_watcher.py [--eva-dir F:/eva] [--backend http://127.0.0.1:8000] [--cdp-port 9222] [--send-port 9223]
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import pathlib
@@ -13,13 +14,28 @@ import urllib.request
 import websockets
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-BACKEND_BASE = "http://127.0.0.1:8000"
-BACKEND_SYNC_URL = BACKEND_BASE + "/api/walle/push-message"
-BACKEND_TOKEN_FILE = pathlib.Path("F:/eva/backend_token.txt")
 
-CDP_URL = "http://localhost:9222"
-WALLE_SAVE = pathlib.Path("F:/eva/eva_cookies.json")
-EDITH_SAVE = pathlib.Path("F:/eva/edith_auth.json")
+def _parse_args():
+    parser = argparse.ArgumentParser(description="XHS Walle Cookie Watcher")
+    parser.add_argument("--eva-dir", default="F:/eva", help="千帆客服工作台安装目录")
+    parser.add_argument("--backend", default="http://127.0.0.1:8000", help="后端地址")
+    parser.add_argument("--cdp-port", type=int, default=9222, help="CDP 调试端口")
+    parser.add_argument("--send-port", type=int, default=9223, help="发消息服务端口")
+    return parser.parse_args()
+
+
+_args = _parse_args()
+_EVA_DIR = pathlib.Path(_args.eva_dir)
+
+BACKEND_BASE = _args.backend.rstrip("/")
+BACKEND_SYNC_URL = BACKEND_BASE + "/api/walle/push-message"
+BACKEND_TOKEN_FILE = _EVA_DIR / "backend_token.txt"
+
+CDP_URL = f"http://localhost:{_args.cdp_port}"
+WALLE_SAVE = _EVA_DIR / "eva_cookies.json"
+EDITH_SAVE = _EVA_DIR / "edith_auth.json"
+
+print(f"[配置] eva目录={_EVA_DIR}  后端={BACKEND_BASE}  CDP端口={_args.cdp_port}  发消息端口={_args.send_port}")
 
 _walle_b_user_id = ""
 _pushed_msg_ids: set[str] = set()
@@ -27,7 +43,7 @@ _pushed_msg_ids: set[str] = set()
 _cached_access_token = ""
 _cached_access_token_exp = 0
 
-SEND_SERVER_PORT = 9223
+SEND_SERVER_PORT = _args.send_port
 
 # 主事件循环引用，供发消息线程使用
 _main_loop: asyncio.AbstractEventLoop | None = None

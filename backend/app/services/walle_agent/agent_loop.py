@@ -156,28 +156,34 @@ def _compress_history(db: Session, platform_account_id: int, app_cid: str,
 
 _TOOL_GUIDE = """---
 行为规则：
-1. 请用中文回复客户问题
-2. 知识库有相关信息时，必须优先依据知识库内容回答，不要自行编造
-3. 当用户发送订单信息（包含订单号、商品名、商品ID等）时，回复结尾必须加上：案例在商品页面评论区.五年老店信誉保证,请继续提供手机序列号和商品卡券【待收货-点击商品-查看卡券-复制卡券提供给客服】以便完成核销。
+1. 请用中文回复客户问题。
+2. 用户提任何问题时，必须第一个调用 search_knowledge 工具搜索知识库（query 填搜索关键词），根据知识库结果回答，知识库无结果时再用自身知识兜底。
+3. 知识库有相关信息时，必须优先依据知识库内容回答，不要自行编造。
+4. 当用户发送订单信息（包含订单号、商品名、商品ID等）时，回复结尾必须加上：案例在商品页面评论区，五年老店信誉保证。本店采用无物流发货，请提供您的手机序列号或IMEI以便完成验机核销。
+5. 如果是图片内容，优先抓取 IMEI、序列号等编码信息。识别到序列号/IMEI 后调用验机工具查询并反馈结果。如果核销完毕，则读取图片内容反馈。优先回答验机。
 
-📦 工具使用说明：
+📦 可用工具：
 
 1️⃣ search_knowledge（搜索知识库）
-- 用途：查话术、FAQ、售后政策、物流等一切客服问题
-- 【强制规则】用户发任何文字问题，必须第一个调用此工具，知识库无结果再用自身知识兜底
+- 用途：查话术、FAQ、售后政策等一切客服问题。
+- 【强制规则】用户发任何文字问题，必须第一个调用此工具，知识库无结果再用自身知识兜底。
 
 2️⃣ query_gsx（GSX 验机查询）
-- 用途：用户提供序列号（字母数字组合）或 IMEI（15位数字）时查询验机报告
-- IMEI 和序列号均可查询，不要告诉用户 IMEI 不能查询
+- 用途：用户提供序列号（字母数字组合）或 IMEI（15位数字）时查询验机报告。
+- IMEI 和序列号均可查询，不要告诉用户 IMEI 不能查询。
 
 3️⃣ record_order（核销登记）
-- 用途：用户同时提供序列号/IMEI 和卡券号时，登记核销订单
+- 用途：用户提供序列号/IMEI 后，验机通过时登记核销订单。本店为无物流发货，核销即完成订单。
 """
 
 
 def _build_system_prompt(shop_cfg) -> str:
-    base = shop_cfg.system_prompt if shop_cfg else "你是小红书店铺客服，请用简洁友好的语言回复买家问题。"
-    return f"{base}\n\n{_TOOL_GUIDE}"
+    persona = (
+        shop_cfg.system_prompt.strip()
+        if shop_cfg and shop_cfg.system_prompt and shop_cfg.system_prompt.strip()
+        else "你是小红书店铺客服，请用简洁友好的语言回复买家问题。"
+    )
+    return f"{persona}\n\n{_TOOL_GUIDE}"
 
 
 # ── Agent 主循环 ──────────────────────────────────────────────────────────────
@@ -224,7 +230,7 @@ def run_agent(
                 data_uri = f"data:{mime};base64,{base64.b64encode(img_resp.content).decode()}"
                 user_content: Any = [
                     {"type": "image_url", "image_url": {"url": data_uri}},
-                    {"type": "text", "text": "请识别图片中的内容，重点提取 IMEI、序列号、卡券号等编码，并回复客户。"},
+                    {"type": "text", "text": "请识别图片中的内容，重点提取 IMEI、序列号等编码信息，并回复客户。本店为无物流发货，无卡券。"},
                 ]
                 active_mc = vision_mc
                 active_api_key = vision_api_key

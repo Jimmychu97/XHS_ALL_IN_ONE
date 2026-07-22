@@ -45,6 +45,7 @@ def _load_yaml_config() -> Dict[str, Any]:
         "scheduler.interval_seconds": "scheduler_interval_seconds",
         "frontend.serve_static": "frontend_serve_static",
         "frontend.build_dir": "frontend_build_dir",
+        "walle.eva_dir": "walle_eva_dir",
     }
 
     def _flatten(data: Any, prefix: str = "") -> None:
@@ -114,6 +115,9 @@ class Settings(BaseSettings):
     # Frontend static serving
     frontend_serve_static: bool = False
     frontend_build_dir: str = "./frontend/dist"
+
+    # Walle EVA
+    walle_eva_dir: str = ""
 
     if hasattr(BaseSettings, "model_config"):
         model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

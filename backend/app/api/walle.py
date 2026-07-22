@@ -287,7 +287,7 @@ def _auto_ai_suggest(user_id: int, platform_account_id: int, app_cid: str, user_
 
         print(f"[AI-DEBUG] suggestion={suggestion[:80]}")
 
-        # 写入会话 ai_suggestion 字段
+        # 写入会话 ai_suggestion 字段 + 写入消息记录
         db2 = SessionLocal()
         try:
             conv = db2.scalars(
@@ -298,6 +298,25 @@ def _auto_ai_suggest(user_id: int, platform_account_id: int, app_cid: str, user_
             ).first()
             if conv:
                 conv.ai_suggestion = suggestion
+                now = datetime.now()
+                # 写入 AI 回复消息，供会话界面展示
+                import uuid
+                db2.add(WalleMessage(
+                    user_id=user_id,
+                    platform_account_id=platform_account_id,
+                    app_cid=app_cid,
+                    msg_id=f"ai_{uuid.uuid4().hex}",
+                    sender_type="bot",
+                    sender_id="ai_agent",
+                    content_type="text",
+                    content=suggestion,
+                    msg_time=now,
+                    raw_json={},
+                    created_at=now,
+                ))
+                conv.last_msg_content = suggestion[:200]
+                conv.last_msg_time = now
+                conv.updated_at = now
                 db2.commit()
             receiver_app_uid = conv.receiver_app_uid or "" if conv else ""
         finally:
@@ -433,6 +452,33 @@ def img_proxy(
         return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"))
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+# ── eva config ───────────────────────────────────────────────────────────────
+
+@router.get("/eva-config")
+def get_eva_config(current_user: User = Depends(get_current_user)):
+    from backend.app.core.config import get_settings
+    return {"eva_dir": get_settings().walle_eva_dir}
+
+
+@router.put("/eva-config")
+def save_eva_config(
+    eva_dir: str = Body(..., embed=True),
+    current_user: User = Depends(get_current_user),
+):
+    import yaml
+    from pathlib import Path as _Path
+    config_path = _Path(__file__).resolve().parent.parent.parent.parent / "config" / "default.yaml"
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    data.setdefault("walle", {})["eva_dir"] = eva_dir
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    # Invalidate settings cache so next read picks up new value
+    from backend.app.core.config import get_settings
+    get_settings.cache_clear()
+    return {"eva_dir": eva_dir}
 
 
 # ── walle accounts ───────────────────────────────────────────────────────────

@@ -46,11 +46,29 @@ def start_frontend(port: int) -> Optional[subprocess.Popen]:
 
 
 def start_cookie_watcher() -> Optional[subprocess.Popen]:
-    watcher = Path(r"F:\eva\cookie_watcher.py")
+    try:
+        from backend.app.core.config import get_settings
+        eva_dir = get_settings().walle_eva_dir
+    except Exception:
+        eva_dir = ""
+
+    # Prefer project-internal copy, fall back to eva_dir
+    project_watcher = ROOT / "cookie_watcher.py"
+    if project_watcher.exists():
+        watcher = project_watcher
+    elif eva_dir:
+        watcher = Path(eva_dir) / "cookie_watcher.py"
+    else:
+        watcher = Path(r"F:\eva\cookie_watcher.py")
+
     if not watcher.exists():
         return None
-    print("Starting cookie_watcher.py...")
-    return subprocess.Popen([sys.executable, str(watcher)])
+
+    cmd = [sys.executable, str(watcher)]
+    if eva_dir:
+        cmd += ["--eva-dir", eva_dir]
+    print(f"Starting cookie_watcher.py from {watcher}")
+    return subprocess.Popen(cmd)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

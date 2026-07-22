@@ -1045,3 +1045,13 @@ export async function fetchWalleOrders(platformAccountId: number, params?: { pag
   const response = await http.get<Paginated<WalleOrder>>("/walle/orders", { params: { platform_account_id: platformAccountId, ...params } });
   return response.data;
 }
+
+export async function fetchWalleEvaConfig(): Promise<{ eva_dir: string }> {
+  const response = await http.get<{ eva_dir: string }>("/walle/eva-config");
+  return response.data;
+}
+
+export async function saveWalleEvaConfig(evaDir: string): Promise<{ eva_dir: string }> {
+  const response = await http.put<{ eva_dir: string }>("/walle/eva-config", { eva_dir: evaDir });
+  return response.data;
+}

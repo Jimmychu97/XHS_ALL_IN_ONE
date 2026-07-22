@@ -74,7 +74,15 @@ import type {
   XhsDataCrawlResponse,
   XhsSearchOptions,
   XhsSearchNote,
-  XhsQrLoginSession
+  XhsQrLoginSession,
+  WalleShopConfig,
+  WalleConversation,
+  WalleMessage,
+  WalleKnowledge,
+  WalleKnowledgePayload,
+  WalleKeyword,
+  WalleOrder,
+  WalleSyncResult,
 } from "../types";
 
 const http = axios.create({
@@ -944,5 +952,96 @@ export async function qianFanAiChat(payload: { messages: { role: string; content
 
 export async function qianFanGenerateMessage(payload: { distributor_info: Record<string, unknown>; intent?: string }): Promise<{ message: string }> {
   const response = await http.post<{ message: string }>("/xhs/qianfan/ai-customer-service/generate-message", payload);
+  return response.data;
+}
+
+// ── Walle 千帆客服 ────────────────────────────────────────────────────────────
+
+export async function importWalleEvaAccount(evaPath?: string): Promise<PlatformAccount> {
+  const response = await http.post<PlatformAccount>("/walle/accounts/import-eva", null, {
+    params: evaPath ? { eva_path: evaPath } : undefined,
+  });
+  // 将 access_token 写入后端，供 cookie_watcher.py 使用
+  await http.post("/walle/accounts/save-token").catch(() => {});
+  return response.data;
+}
+
+export async function fetchWalleAccounts(): Promise<{ items: PlatformAccount[] }> {
+  const response = await http.get<{ items: PlatformAccount[] }>("/walle/accounts");
+  return response.data;
+}
+
+export async function walleSync(platformAccountId: number): Promise<WalleSyncResult> {
+  const response = await http.post<WalleSyncResult>("/walle/sync", null, { params: { platform_account_id: platformAccountId } });
+  return response.data;
+}
+
+export async function fetchWalleConversations(params?: { platform_account_id?: number; status?: string; page?: number; page_size?: number }): Promise<Paginated<WalleConversation>> {
+  const response = await http.get<Paginated<WalleConversation>>("/walle/conversations", { params });
+  return response.data;
+}
+
+export async function updateWalleConversationStatus(conversationId: number, status: string): Promise<{ id: number; status: string }> {
+  const response = await http.patch<{ id: number; status: string }>(`/walle/conversations/${conversationId}/status`, null, { params: { status } });
+  return response.data;
+}
+
+export async function fetchWalleMessages(conversationId: number, params?: { page?: number; page_size?: number }): Promise<Paginated<WalleMessage>> {
+  const response = await http.get<Paginated<WalleMessage>>(`/walle/conversations/${conversationId}/messages`, { params });
+  return response.data;
+}
+
+export async function walleAiSuggest(conversationId: number): Promise<{ success: boolean; suggestion: string }> {
+  const response = await http.post<{ success: boolean; suggestion: string }>(`/walle/conversations/${conversationId}/ai-suggest`);
+  return response.data;
+}
+
+export async function fetchWalleShopConfig(platformAccountId: number): Promise<WalleShopConfig> {
+  const response = await http.get<WalleShopConfig>(`/walle/shop-configs/${platformAccountId}`);
+  return response.data;
+}
+
+export async function upsertWalleShopConfig(platformAccountId: number, payload: Omit<WalleShopConfig, "id" | "platform_account_id">): Promise<WalleShopConfig> {
+  const response = await http.put<WalleShopConfig>(`/walle/shop-configs/${platformAccountId}`, payload);
+  return response.data;
+}
+
+export async function fetchWalleKnowledge(platformAccountId: number, params?: { page?: number; page_size?: number }): Promise<Paginated<WalleKnowledge>> {
+  const response = await http.get<Paginated<WalleKnowledge>>("/walle/knowledge", { params: { platform_account_id: platformAccountId, ...params } });
+  return response.data;
+}
+
+export async function createWalleKnowledge(platformAccountId: number, payload: WalleKnowledgePayload): Promise<WalleKnowledge> {
+  const response = await http.post<WalleKnowledge>("/walle/knowledge", { platform_account_id: platformAccountId, ...payload });
+  return response.data;
+}
+
+export async function updateWalleKnowledge(id: number, payload: Partial<WalleKnowledgePayload>): Promise<WalleKnowledge> {
+  const response = await http.patch<WalleKnowledge>(`/walle/knowledge/${id}`, payload);
+  return response.data;
+}
+
+export async function deleteWalleKnowledge(id: number): Promise<{ id: number; status: string }> {
+  const response = await http.delete<{ id: number; status: string }>(`/walle/knowledge/${id}`);
+  return response.data;
+}
+
+export async function fetchWalleKeywords(platformAccountId: number): Promise<{ items: WalleKeyword[] }> {
+  const response = await http.get<{ items: WalleKeyword[] }>("/walle/keywords", { params: { platform_account_id: platformAccountId } });
+  return response.data;
+}
+
+export async function createWalleKeyword(platformAccountId: number, keyword: string): Promise<WalleKeyword> {
+  const response = await http.post<WalleKeyword>("/walle/keywords", { platform_account_id: platformAccountId, keyword });
+  return response.data;
+}
+
+export async function deleteWalleKeyword(id: number): Promise<{ id: number; status: string }> {
+  const response = await http.delete<{ id: number; status: string }>(`/walle/keywords/${id}`);
+  return response.data;
+}
+
+export async function fetchWalleOrders(platformAccountId: number, params?: { page?: number; page_size?: number }): Promise<Paginated<WalleOrder>> {
+  const response = await http.get<Paginated<WalleOrder>>("/walle/orders", { params: { platform_account_id: platformAccountId, ...params } });
   return response.data;
 }

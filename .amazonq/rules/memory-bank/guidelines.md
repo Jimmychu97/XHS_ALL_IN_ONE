@@ -3,65 +3,53 @@
 ## Code Quality Standards
 
 ### Python
-- All files start with `from __future__ import annotations` for forward-reference compatibility
-- `loguru` is used for logging in SDK/utility layers; `logging.getLogger(__name__)` is used in service/scheduler layers
-- Error handling in SDK methods always follows the `(success: bool, msg: str, res_json)` triple-return pattern
-- Every SDK method wraps its body in `try/except Exception as e` and returns `success=False, msg=_log_api_error(e)` on failure
-- `from typing import Any, Optional` is imported explicitly; modern union syntax (`X | Y`) is avoided for compatibility
-- `from __future__ import annotations` enables PEP 604 style hints in docstrings without runtime cost
+- All files start with `from __future__ import annotations` for forward-reference support
+- Module-level docstrings explain purpose and design principles
+- Private helpers prefixed with `_` (e.g., `_log_api_error`, `_cookies_to_string`, `_serialize_publish_job`)
+- Minimal inline comments — code is self-documenting through clear naming
+- `loguru` used in SDK layer (`apis/`, `xhs_utils/`); `logging.getLogger(__name__)` used in backend services
+- Exception handling: always catch broadly, set `success = False`, log with `_log_api_error(e)`, return `(success, msg, res_json)` triple
 
 ### TypeScript / React
-- All shared types live in `frontend/src/types/index.ts` — no inline type definitions in component files
-- Generic pagination wrapper: `Paginated<T>` with `{ total, page, page_size, items }`
-- Union string literals are used for status fields (e.g., `"pending" | "running" | "completed" | "failed" | string`) — the trailing `| string` allows forward-compatible extension
-- Payload types are separate from response types (e.g., `ModelConfigPayload` vs `ModelConfig`)
+- All types defined in `frontend/src/types/index.ts` — single source of truth
+- Payload types named `*Payload`, response types named `*Response`
+- Generic `Paginated<T>` wrapper for all list responses
+- Optional fields use `?` suffix; union types for status strings include `| string` fallback for extensibility
+- No inline type definitions in component files — always import from `types/index.ts`
 
 ---
 
-## Structural Conventions
+## Naming Conventions
 
-### Backend Layer Separation (strict)
-```
-apis/           ← raw XHS SDK (never import from backend/)
-adapters/xhs/   ← only layer allowed to import from apis/
-services/       ← business logic, imports from adapters/ and models/
-api/            ← FastAPI routers, imports from services/ and core/
-```
-Violating this boundary (e.g., importing `apis/` directly in a router) is forbidden.
+### Python
+- Classes: `PascalCase` (e.g., `XHS_Apis`, `WalleEvaAPI`, `OpenAICompatibleTextClient`)
+- Functions/methods: `snake_case`
+- Private helpers: `_snake_case`
+- Constants: `UPPER_SNAKE_CASE` (e.g., `MAX_LOOPS`, `COMPRESS_CHAR_THRESHOLD`, `RETAIN_COUNT`)
+- DB models: `PascalCase` matching table name in `snake_case` (e.g., `PlatformAccount` → `platform_accounts`)
 
-### FastAPI Router Pattern
+### TypeScript
+- Types/interfaces: `PascalCase`
+- Variables/functions: `camelCase`
+- API payload types: `*Payload` suffix
+- API response types: `*Response` suffix
+- Enum-like string unions: `"snake_case"` values (e.g., `"coming_soon"`, `"note_urls"`)
+
+---
+
+## API Layer Patterns
+
+### SDK Return Convention (apis/)
+Every SDK method returns a 3-tuple `(success: bool, msg: str, res_json: dict | list | None)`:
 ```python
-# All routers use prefix="/api" at registration in main.py
-# Router files define their own sub-prefix:
-router = APIRouter(prefix="/xhs/...", tags=["..."])
-
-# Dependency injection for auth + DB:
-@router.post("/endpoint")
-def my_endpoint(
-    payload: SomeSchema,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    ...
-```
-
-### Ownership Enforcement (universal pattern)
-Every resource (note, draft, tag, account, publish job, etc.) is scoped to `user_id`. Cross-user access always returns HTTP 404 (not 403) to avoid information leakage:
-```python
-item = db.query(Model).filter(Model.id == item_id, Model.user_id == current_user.id).first()
-if item is None:
-    raise HTTPException(status_code=404, detail="Not found")
-```
-
-### SDK Method Signature Convention
-```python
-def method_name(self, param1: str, cookies_str: str, proxies: dict = None):
+def get_user_info(self, user_id: str, cookies_str: str, proxies: dict = None):
     res_json = None
     try:
-        api = "/api/sns/web/v1/..."
-        # build params / data
-        headers, cookies, data = generate_request_params(cookies_str, api, data, 'POST')
-        response = requests.post(self.base_url + api, headers=headers, data=data, cookies=cookies, proxies=proxies, timeout=REQUEST_TIMEOUT)
+        api = f"/api/sns/web/v1/user/otherinfo"
+        params = {"target_user_id": user_id}
+        splice_api = splice_str(api, params)
+        headers, cookies, data = generate_request_params(cookies_str, splice_api, '', 'GET')
+        response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=REQUEST_TIMEOUT)
         res_json = response.json()
         success, msg = res_json["success"], res_json["msg"]
     except Exception as e:
@@ -70,225 +58,231 @@ def method_name(self, param1: str, cookies_str: str, proxies: dict = None):
     return success, msg, res_json
 ```
 
-### Pagination Cursor Pattern (SDK)
-Paginated SDK methods follow a `while True` loop with cursor advancement:
+### FastAPI Router Pattern
+- One router file per resource in `backend/app/api/`
+- Router prefix set at file level: `router = APIRouter(prefix="/walle", tags=["walle"])`
+- All routes use `Depends(get_current_user)` and `Depends(get_db)` for auth + DB injection
+- Ownership enforced: always check `resource.user_id == current_user.id`, raise `HTTPException(404)` on mismatch (not 403, to avoid leaking existence)
+- Delete responses return `{"id": resource_id, "status": "deleted"}`
+- List responses use `paginated()` helper from `schemas/common.py`
+
 ```python
-cursor = ''
-items = []
-while True:
-    success, msg, res_json = self.get_page(cursor, ...)
-    if not success:
-        raise Exception(msg)
-    items.extend(res_json["data"]["items"])
-    cursor = str(res_json["data"].get("cursor", ""))
-    if not res_json["data"]["has_more"] or not items:
-        break
-return success, msg, items
+@router.delete("/knowledge/{knowledge_id}")
+def delete_knowledge(
+    knowledge_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    k = db.get(WalleKnowledge, knowledge_id)
+    if not k or k.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Not found")
+    db.delete(k)
+    db.commit()
+    return {"id": knowledge_id, "status": "deleted"}
+```
+
+### Pydantic Request Models
+Defined inline in the router file using `class *Payload(BaseModel)`:
+```python
+class ShopConfigPayload(BaseModel):
+    ai_enabled: bool = False
+    auto_send: bool = False
+    model_config_id: Optional[int] = None
+    system_prompt: str = ""
 ```
 
 ---
 
-## Semantic Patterns
+## Database Patterns
 
-### Dependency Injection for Adapters (testability)
-Adapters are injected via FastAPI `Depends()` so tests can swap them with fakes:
+### Session Management
+- Sync routes: `db: Session = Depends(get_db)` — generator-based, auto-closes
+- Background threads: `db = SessionLocal()` with explicit `try/finally: db.close()`
+- Never share a Session across threads
+
+### SQLAlchemy Query Style
+Use `select()` + `db.scalars()` (SQLAlchemy 2.0 style), not legacy `db.query()`:
 ```python
-# In router file:
-def get_pc_login_adapter() -> XhsPcLoginAdapter:
-    return XhsPcLoginAdapter()
+items = db.scalars(
+    select(WalleConversation)
+    .where(WalleConversation.user_id == current_user.id)
+    .order_by(WalleConversation.updated_at.desc())
+).all()
+```
+Legacy `db.query()` still appears in older code — prefer `select()` for new code.
 
-@router.post("/qrcode")
-def create_qrcode(adapter=Depends(get_pc_login_adapter), ...):
-    ...
-
-# In tests:
-app.dependency_overrides[get_pc_login_adapter] = lambda: FakePcLoginAdapter()
+### Upsert Pattern
+Check existence first, update if found, insert if not:
+```python
+existing = db.scalars(select(Model).where(...)).first()
+if existing:
+    existing.field = new_value
+    existing.updated_at = now
+else:
+    db.add(Model(...))
+db.commit()
 ```
 
-### Test Database Override Pattern
+### Flush vs Commit
+- `db.flush()` to get auto-generated IDs before referencing them in the same transaction
+- `db.commit()` at the end of the logical unit of work
+- `db.rollback()` in per-item loops to recover from individual failures without aborting the batch
+
+---
+
+## Security Patterns
+
+### Ownership Enforcement
+Cross-user access always returns 404 (not 403) to avoid leaking resource existence:
 ```python
-def _override_database(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}", connect_args={"check_same_thread": False})
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base.metadata.create_all(bind=engine)
-
-    def override_get_db():
-        db = TestingSessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-    return get_db  # return key for cleanup
-
-# Always clean up in finally:
-app.dependency_overrides.pop(get_db, None)
+resource = db.get(Model, resource_id)
+if not resource or resource.user_id != current_user.id:
+    raise HTTPException(status_code=404, detail="Not found")
 ```
 
-### Fake Adapter Pattern (tests)
-Test fakes are plain classes with the same method signatures as real adapters. They use `assert` to validate inputs and return hardcoded data:
+### Sensitive Data
+- Cookies and API keys encrypted with Fernet before DB storage
+- Decrypt with `decrypt_text()` from `credential_service` / `security`
+- API responses never expose `encrypted_api_key` — use `has_api_key: bool` instead
+- JWT tokens: `access_token` (short-lived) + `refresh_token` (long-lived), validated via `decode_token()`
+
+### SSE Auth
+EventSource cannot set headers, so SSE endpoints accept `token` as a query parameter:
+```python
+@router.get("/logs/stream")
+async def log_stream(token: Optional[str] = Query(None), db: Session = Depends(get_db)):
+    payload = decode_token(token)
+    user_id: int = payload.get("user_id")
+```
+
+---
+
+## Testing Patterns
+
+### Test Structure
+- `TestClient(app)` at module level — shared across all tests
+- DB isolation: `_override_database(tmp_path)` creates a fresh SQLite DB per test, overrides `get_db` via `app.dependency_overrides`
+- Always clean up overrides in `finally` blocks
+- Adapter injection: `app.dependency_overrides[get_adapter] = lambda: FakeAdapter()`
+
+### Fake Adapter Pattern
+Fake adapters are plain classes with the same method signatures as real adapters:
 ```python
 class FakePcLoginAdapter:
     def create_qrcode(self):
-        return {"cookies": {"a1": "temp-a1"}, "qr_id": "qr-123", "qr_url": "https://example.test/qr"}
+        return {"cookies": {"a1": "temp-a1"}, "qr_id": "qr-123", ...}
 
     def check_qrcode_status(self, qr_id, code, cookies):
-        assert qr_id == "qr-123"
-        return {"status": "confirmed", "cookies": {"a1": "final-a1", "web_session": "session-123"}}
+        return {"status": "confirmed", "cookies": {...}}
 ```
 
-### Cookie Encryption Pattern
-All cookies and API keys are encrypted with Fernet before DB storage:
+### Test Naming
+`test_<resource>_<action>_<condition>` — descriptive, behavior-focused:
+- `test_xhs_pc_qrcode_login_session_persists_and_confirms_account`
+- `test_account_delete_requires_owner_and_removes_account`
+- `test_notes_batch_save_rejects_cross_user_account`
+
+### Source-level Tests
+Some tests read frontend source files directly to assert UI invariants:
 ```python
-from backend.app.core.security import encrypt_text, decrypt_text
-
-# Store:
-cookie_version = AccountCookieVersion(
-    platform_account_id=account.id,
-    encrypted_cookies=encrypt_text(json.dumps(cookies_dict)),
-)
-
-# Retrieve:
-raw = decrypt_text(cookie_version.encrypted_cookies)
-cookies = json.loads(raw) if raw.startswith("{") else raw  # handle both JSON and string formats
-```
-
-### Cookie Format Normalization
-Cookies may be stored as JSON dict or as a `key=value; key2=value2` string. Always normalize before use:
-```python
-def _cookies_to_string(value: str) -> str:
-    stripped = value.strip()
-    if stripped.startswith("{"):
-        cookies = json.loads(stripped)
-        return "; ".join(f"{k}={v}" for k, v in cookies.items())
-    return stripped
-```
-
-### Task Record Pattern
-Every significant operation creates a `Task` record for audit:
-```python
-task = Task(
-    user_id=current_user.id,
-    platform="xhs",
-    task_type="ai_rewrite",   # snake_case type identifier
-    status="running",
-    progress=20,
-    payload={"draft_id": draft.id, "model_config_id": config.id},
-)
-db.add(task)
-db.commit()
-# ... do work ...
-task.status = "completed"
-task.progress = 100
-task.payload = {**task.payload, "result_key": result_value}
-db.commit()
-```
-
-### Scheduler Jobs (APScheduler)
-All background jobs use `max_instances=1, coalesce=True` to prevent overlap:
-```python
-scheduler.add_job(
-    job_func,
-    "interval",
-    seconds=interval_seconds,
-    id="unique_job_id",
-    replace_existing=True,
-    max_instances=1,
-    coalesce=True,
-)
-```
-Scheduler jobs open their own `SessionLocal()` session and always close it in `finally`.
-
-### Notification Pattern
-Cookie expiry and task failures create `Notification` records:
-```python
-db.add(Notification(
-    user_id=account.user_id,
-    title="账号 Cookie 过期",
-    body=f"账号「{account.nickname}」Cookie 已失效，请重新绑定。",
-    level="warning",  # "info" | "warning" | "error"
-))
-```
-
-### Metrics Extraction (flexible raw_json)
-Note engagement metrics are extracted from `raw_json` with multiple key fallbacks:
-```python
-def _first_metric(raw: dict, keys: tuple[str, ...]) -> int:
-    for key in keys:
-        if key in raw:
-            return _as_int(raw.get(key))
-    return 0
-
-likes = _first_metric(merged, ("likes", "liked_count", "like_count", "likedCount"))
+def test_accounts_page_uses_antd_components_and_shows_check_state():
+    source = open("frontend/src/pages/platforms/xhs/accounts-page.tsx", encoding="utf-8").read()
+    assert "antd" in source
+    assert "checkingAccountIds" in source
 ```
 
 ---
 
-## Naming Conventions
+## Agent / Tool Registry Pattern
 
-### Python
-- Module-level private helpers: `_snake_case` prefix (e.g., `_log_api_error`, `_cookies_to_string`)
-- Service functions that run once: `run_X_once()` (e.g., `run_due_publish_jobs_once`)
-- Service functions for all users: `run_X_for_all_users()` (e.g., `run_due_publish_jobs_for_all_users`)
-- Adapter factories injected via `Depends`: `get_X_adapter` or `get_X_adapter_factory`
-- SQLAlchemy models: `PascalCase` (e.g., `PlatformAccount`, `PublishJob`)
-- DB table names: `snake_case` plural (e.g., `platform_accounts`, `publish_jobs`)
+### @agent_tool Decorator
+Register tools with a Pydantic param model for automatic JSON schema generation:
+```python
+@agent_tool(
+    name="search_knowledge",
+    description="搜索知识库",
+    param_model=SearchKnowledgeParams,
+)
+def search_knowledge(params: SearchKnowledgeParams) -> str:
+    ...
+```
 
-### TypeScript
-- Types: `PascalCase` (e.g., `PlatformAccount`, `PublishJob`)
-- Payload types: `XxxPayload` suffix (e.g., `CreateDraftPayload`)
-- Response types: `XxxResponse` suffix (e.g., `SaveNotesResponse`)
-- API client functions: `camelCase` verbs (e.g., `deleteSavedNote`, `batchSaveNotes`)
+### Tool Execution
+`execute_tool(name, arguments, dependencies)` — dependencies dict injects context (user_id, platform_account_id, etc.) into tool params automatically, without requiring callers to pass them explicitly.
+
+### Agent Loop
+```python
+# Max 5 iterations: LLM → tool_calls → execute → append results → repeat
+while loop_count < MAX_LOOPS:
+    resp = requests.post(endpoint, json=req_body, ...)
+    choice = resp.json()["choices"][0]
+    if choice["finish_reason"] == "tool_calls":
+        # execute tools, append results, continue
+    else:
+        # final answer, break
+```
 
 ---
 
-## API Response Shapes
+## Background Task Patterns
 
-### Standard list response
-```json
-{ "total": 10, "page": 1, "page_size": 20, "items": [...] }
+### Scheduler Jobs
+APScheduler jobs are registered in `build_due_publish_scheduler()`:
+- `max_instances=1` and `coalesce=True` prevent overlapping runs
+- Each job function opens its own `SessionLocal()` and closes it in `finally`
+- Failures are logged but never crash the scheduler
+
+### Background Threads
+For fire-and-forget tasks triggered by incoming requests (e.g., AI agent on message arrival):
+```python
+import threading
+threading.Thread(
+    target=_auto_ai_suggest,
+    args=(user_id, account_id, app_cid, message),
+    daemon=True,
+).start()
 ```
 
-### Standard delete response
-```json
-{ "id": 42, "status": "deleted" }
+### SSE Streaming
+```python
+async def generate():
+    try:
+        for entry in history:
+            yield f"data: {json.dumps(entry)}\\n\\n"
+        while True:
+            try:
+                entry = await asyncio.wait_for(q.get(), timeout=25)
+                yield f"data: {json.dumps(entry)}\\n\\n"
+            except asyncio.TimeoutError:
+                yield 'data: {"ping": true}\\n\\n'  # keepalive
+    finally:
+        subs.remove(q)  # always clean up subscriber
+
+return StreamingResponse(generate(), media_type="text/event-stream",
+    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 ```
-
-### Standard task-backed operation response
-```json
-{ "task": { "id": 1, "task_type": "crawl", "status": "completed", ... }, "saved_count": 3, "items": [...] }
-```
-
-### SSE (Server-Sent Events) for long-running crawls
-Events are `data: <json>` lines. Each event has a `type` field:
-- `type: "item"` — individual result item
-- `type: "done"` — final summary with `total`, `success_count`, `failed_count`
-
----
-
-## Security Practices
-- JWT tokens for all API authentication; `Authorization: Bearer <token>` header
-- Refresh token flow: `/api/auth/refresh` accepts `{ refresh_token }` and returns new tokens
-- All sensitive fields (`encrypted_cookies`, `encrypted_api_key`) are never returned in API responses
-- API responses for model configs include `has_api_key: bool` instead of the key itself
-- Cross-user resource access returns 404 (not 403) to prevent enumeration
-- Proxy environment variables (`HTTPS_PROXY`, `HTTP_PROXY`) are temporarily removed during XHS SDK calls via `direct_xhs_request_env()` context manager to prevent routing XHS traffic through system proxies
 
 ---
 
 ## Frontend Patterns
 
-### API Client (`frontend/src/lib/api.ts`)
-- Single Axios instance with JWT interceptor
-- All API functions are named exports (no default export)
-- Functions follow `verbNoun` naming: `getSavedNotes`, `deleteSavedNote`, `batchSaveNotes`
+### API Client
+All HTTP calls go through `frontend/src/lib/api.ts` (Axios instance with auth header injection). Never use `fetch` directly.
 
-### Page State
-- `keepalive-for-react-router` is used to preserve page state across route changes
-- Ant Design (`antd`) is the primary component library for all UI elements
-- `lucide-react` is used for supplementary icons
+### Component Organization
+Feature pages live in `frontend/src/pages/platforms/xhs/<feature>-page.tsx`. Each page is self-contained with its own state and API calls.
+
+### UI Library
+Ant Design (antd v6) is the primary UI library. All tables, forms, modals, and notifications use antd components. Lucide React is used for icons.
 
 ### Type Safety
-- All API request/response shapes have corresponding TypeScript types in `types/index.ts`
-- `zod` is available for runtime validation but types are the primary contract
+All API request/response shapes are typed in `types/index.ts`. Use `Paginated<T>` for list responses. Never use `any` for API data — define a proper type.
+
+---
+
+## SDK Isolation Rule
+
+`apis/` is the bottom-layer SDK — **do not modify directly**. All upper-layer code calls through `backend/app/adapters/xhs/` adapters. This ensures:
+1. Signing logic stays isolated and testable
+2. Adapters can be swapped in tests via `app.dependency_overrides`
+3. Proxy environment is managed cleanly via `direct_xhs_request_env()` context manager in all adapters

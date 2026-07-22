@@ -45,6 +45,14 @@ def start_frontend(port: int) -> Optional[subprocess.Popen]:
     return subprocess.Popen(command, cwd=str(frontend_dir))
 
 
+def start_cookie_watcher() -> Optional[subprocess.Popen]:
+    watcher = Path(r"F:\eva\cookie_watcher.py")
+    if not watcher.exists():
+        return None
+    print("Starting cookie_watcher.py...")
+    return subprocess.Popen([sys.executable, str(watcher)])
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
 
@@ -63,15 +71,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         pass
 
     frontend_process = start_frontend(args.frontend_port) if args.with_frontend else None
+    watcher_process = start_cookie_watcher()
 
     print(f"Starting backend at http://{host}:{port}")
     try:
         import uvicorn
-
         uvicorn.run("backend.app.main:app", host=host, port=port, reload=args.reload)
     finally:
         if frontend_process and frontend_process.poll() is None:
             frontend_process.terminate()
+        if watcher_process and watcher_process.poll() is None:
+            watcher_process.terminate()
     return 0
 
 

@@ -40,6 +40,7 @@ def init_db(bind=engine) -> None:
     _normalize_model_config_names(bind)
     _normalize_sqlite_datetime_storage(bind)
     _add_walle_shop_config_columns(bind)
+    _add_ark_sku_table(bind)
 
 
 def _run_alembic_migrations() -> None:
@@ -166,6 +167,32 @@ def _add_walle_shop_config_columns(bind) -> None:
         ]:
             if col not in existing:
                 conn.execute(text(ddl))
+
+
+def _add_ark_sku_table(bind) -> None:
+    """建 ark_product_skus 表（已存在则跳过）"""
+    with bind.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS ark_product_skus ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "user_id INTEGER NOT NULL REFERENCES users(id), "
+            "product_id INTEGER NOT NULL REFERENCES ark_products(id), "
+            "item_id VARCHAR(128) NOT NULL, "
+            "sku_id VARCHAR(128) NOT NULL, "
+            "sku_name VARCHAR(512) DEFAULT '', "
+            "query_type VARCHAR(255), "
+            "service_id VARCHAR(128) DEFAULT '', "
+            "price INTEGER, "
+            "stock INTEGER, "
+            "delivery_time VARCHAR(32), "
+            "delivery_type INTEGER, "
+            "spec_image TEXT, "
+            "barcode VARCHAR(128), "
+            "synced_at DATETIME, "
+            "created_at DATETIME, "
+            "updated_at DATETIME, "
+            "UNIQUE(product_id, sku_id))"
+        ))
 
 
 def get_db():

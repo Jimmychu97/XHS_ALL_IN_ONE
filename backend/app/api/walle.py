@@ -141,6 +141,9 @@ def push_message(
     import traceback
     try:
         print(f"[PUSH-DEBUG] payload={json.dumps(payload, ensure_ascii=False)[:300]}")
+        msgs = (payload.get("data") or {}).get("messages") or []
+        for _m in msgs:
+            print(f"[MSG-DEBUG] senderType={_m.get('senderType')} content={str(_m.get('content',''))[:80]}")
         return _push_message_impl(payload, current_user, db)
     except Exception as e:
         traceback.print_exc()
@@ -186,7 +189,7 @@ def _push_message_impl(payload: dict, current_user: User, db: Session):
             latest_input = "\n".join(m.get("content", "") for m in customer_msgs if m.get("content"))
             import threading
             threading.Thread(
-                target=_auto_ai_suggest,
+                target=_dispatch_customer_message,
                 args=(current_user.id, account.id, app_cid, latest_input),
                 daemon=True,
             ).start()
@@ -201,6 +204,21 @@ def _push_message_impl(payload: dict, current_user: User, db: Session):
             if msgs:
                 _upsert_conv(db, current_user.id, app_cid, {}, account)
                 _save_messages(db, current_user.id, app_cid, msgs, now, account)
+                if account:
+                    for cm in msgs:
+                        ci = cm.get("contentInfo") or {}
+                        summary = ci.get("summary") or cm.get("content") or ""
+                        if not isinstance(summary, str):
+                            summary = json.dumps(summary, ensure_ascii=False)
+                        # 订单卡/商品卡只有买家能发，直接触发
+                        if summary.strip() in ("[订单]", "[商品信息]", "[商品]"):
+                            import threading
+                            threading.Thread(
+                                target=_dispatch_customer_message,
+                                args=(current_user.id, account.id, app_cid, "[订单]"),
+                                daemon=True,
+                            ).start()
+                            break
 
     msg_map = data.get("messageMap") or {}
     if isinstance(msg_map, dict):
@@ -232,6 +250,230 @@ def _send_via_cookie_watcher(app_cid: str, text: str, receiver_app_uid: str = ""
         return resp.get("ok", False), resp.get("result", {}).get("error", "")
     except Exception as e:
         return False, str(e)
+
+
+# ── 序列号 / IMEI 检测 ────────────────────────────────────────────────────────
+
+import re as _re
+
+_SN_RE = _re.compile(r'\b([A-HJ-NP-Z0-9]{10}|[A-HJ-NP-Z0-9]{12})\b')
+_IMEI_RE = _re.compile(r'(?:IMEI[:\s]*)?\b(\d{15})\b', _re.IGNORECASE)
+
+_ORDER_GUIDE = (
+    "您好！感谢您的订单 🎉\n"
+    "本店采用无物流发货，请提供您的设备序列号或IMEI以便完成验机核销。\n\n"
+    "📱 iPhone / iPad：设置 → 通用 → 关于本机，或拨打 *#06# 获取IMEI\n"
+    "💻 Mac / MacBook：苹果菜单 → 关于本机 → 序列号\n"
+    "🎧 AirPods / 耳机：打开充电盒，盒内盖印有序列号；或在已配对iPhone的设置 → 蓝牙 → 设备名称旁边查看\n"
+    "⌚ Apple Watch：设置 → 通用 → 关于本机；或表背面印有序列号\n\n"
+    "✅ 所有苹果设备序列号均可查询，发送序列号即可完成验机核销 😊"
+)
+
+
+def _luhn_check(n: str) -> bool:
+    total = 0
+    for i, d in enumerate(reversed(n)):
+        x = int(d)
+        if i % 2 == 1:
+            x *= 2
+            if x > 9:
+                x -= 9
+        total += x
+    return total % 10 == 0
+
+
+def _extract_sn_imei(text: str) -> tuple[str, str]:
+    """返回 (sn, imei)，未找到则为空字符串"""
+    # IMEI 优先（显式前缀或 Luhn 校验通过）
+    for m in _IMEI_RE.finditer(text):
+        candidate = m.group(1)
+        prefix = m.group(0)
+        if 'imei' in prefix.lower() or _luhn_check(candidate):
+            return "", candidate
+    # SN：必须含至少一个字母
+    for m in _SN_RE.finditer(text.upper()):
+        candidate = m.group(1).replace('O', '0').replace('I', '1')
+        if _re.search(r'[A-HJ-NP-Z]', candidate):
+            return candidate, ""
+    return "", ""
+
+
+def _clear_agent_session(platform_account_id: int, app_cid: str):
+    """清空该会话的 Agent 历史，避免跨轮次污染"""
+    from backend.app.core.database import SessionLocal
+    from backend.app.models.walle import WalleAgentSession
+    db = SessionLocal()
+    try:
+        rows = db.scalars(
+            select(WalleAgentSession).where(
+                WalleAgentSession.platform_account_id == platform_account_id,
+                WalleAgentSession.app_cid == app_cid,
+            )
+        ).all()
+        for r in rows:
+            db.delete(r)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _fetch_buyer_orders(app_cid: str) -> str:
+    """从千帆工作台拉取该会话的订单信息，返回可读文本"""
+    try:
+        from apis.xhs_walle_eva_apis import WalleEvaAPI
+        from backend.app.core.database import SessionLocal
+        # 先从数据库取买家 userId
+        db = SessionLocal()
+        try:
+            conv = db.scalars(
+                select(WalleConversation).where(WalleConversation.app_cid == app_cid)
+            ).first()
+            buyer_user_id = conv.customer_id if conv else None
+        finally:
+            db.close()
+
+        if not buyer_user_id:
+            return ""
+
+        ok, _, res = WalleEvaAPI().get_buyer_packages(buyer_user_id)
+        if not ok or not res:
+            return ""
+        # packages/v2 返回 data.resultList
+        packages = (res.get("data") or {}).get("resultList") or []
+        if not packages:
+            return ""
+        lines = []
+        for pkg in packages[:3]:
+            skus = pkg.get("skuSnapshots") or []
+            name = skus[0].get("name", "") if skus else ""
+            spec = skus[0].get("scskuCode", "") if skus else ""
+            order_sn = pkg.get("carriageInsurance", {}).get("orderId") or ""
+            status = pkg.get("erpStatusStr") or ""
+            amount = (pkg.get("packagePriceInfo") or {}).get("userActualPaidPrice", "")
+            lines.append(f"商品：{name} 规格：{spec} 订单号：{order_sn} 状态：{status} 实付：{amount}元")
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"[ORDER-FETCH] 失败: {e}")
+        return ""
+
+
+def _dispatch_customer_message(user_id: int, platform_account_id: int, app_cid: str, user_message: str):
+    """前置拦截：订单卡片/商品卡 → 清历史+引导序列号；含序列号/IMEI → 直接验机；其余 → 拉订单+Agent"""
+    stripped = user_message.strip()
+
+    # 1. 订单卡/商品卡 → 清空 Agent 历史，发引导语
+    if stripped in ("[订单]", "[商品信息]", "[商品]"):
+        _clear_agent_session(platform_account_id, app_cid)
+        _fire_and_forget_reply(user_id, platform_account_id, app_cid, _ORDER_GUIDE)
+        return
+
+    # 2. 含序列号 / IMEI → 直接验机
+    sn, imei = _extract_sn_imei(user_message)
+    code = sn or imei
+    if code:
+        _handle_sn_imei(user_id, platform_account_id, app_cid, code)
+        return
+
+    # 3. 普通消息 → 先拁取订单信息注入上下文，再走 Agent
+    order_info = _fetch_buyer_orders(app_cid)
+    if order_info:
+        enriched = f"{user_message}\n\n[当前订单信息]\n{order_info}"
+    else:
+        enriched = user_message
+    _auto_ai_suggest(user_id, platform_account_id, app_cid, enriched)
+
+
+def _fire_and_forget_reply(user_id: int, platform_account_id: int, app_cid: str, text: str):
+    """写库 + 发送固定回复"""
+    import uuid
+    from backend.app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
+        now = datetime.now()
+        conv = db.scalars(
+            select(WalleConversation).where(
+                WalleConversation.app_cid == app_cid,
+                WalleConversation.platform_account_id == platform_account_id,
+            )
+        ).first()
+        receiver_app_uid = conv.receiver_app_uid or "" if conv else ""
+        db.add(WalleMessage(
+            user_id=user_id,
+            platform_account_id=platform_account_id,
+            app_cid=app_cid,
+            msg_id=f"ai_{uuid.uuid4().hex}",
+            sender_type="bot",
+            sender_id="ai_agent",
+            content_type="text",
+            content=text,
+            msg_time=now,
+            raw_json={},
+            created_at=now,
+        ))
+        if conv:
+            conv.ai_suggestion = text
+            conv.last_msg_content = text[:200]
+            conv.last_msg_time = now
+            conv.updated_at = now
+        db.commit()
+    finally:
+        db.close()
+    _append_log(user_id, "success", f"🤖 固定回复: {text[:60]}", {"app_cid": app_cid})
+    ok, err = _send_via_cookie_watcher(app_cid, text, receiver_app_uid)
+    level = "success" if ok else "error"
+    _append_log(user_id, level, f"📤 发送{'OK' if ok else '失败: ' + err}: {text[:40]}", {"app_cid": app_cid})
+
+
+def _handle_sn_imei(user_id: int, platform_account_id: int, app_cid: str, code: str):
+    """检测到序列号/IMEI：调 GSX 验机 → 回复结果 → 写 WalleOrder"""
+    from backend.app.core.database import SessionLocal
+    from sqlalchemy import select as _select
+    db = SessionLocal()
+    try:
+        shop_cfg = db.scalars(
+            _select(WalleShopConfig).where(
+                WalleShopConfig.platform_account_id == platform_account_id,
+                WalleShopConfig.user_id == user_id,
+            )
+        ).first()
+        gsx_appid = shop_cfg.gsx_appid or "" if shop_cfg else ""
+        gsx_secret = shop_cfg.gsx_secret or "" if shop_cfg else ""
+        gsx_key = shop_cfg.gsx_key or "" if shop_cfg else ""
+    finally:
+        db.close()
+
+    if not (gsx_appid and gsx_secret and gsx_key):
+        _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                               f"已收到您的序列号/IMEI：{code}，正在处理，请稍候。")
+        return
+
+    # 调 GSX
+    from backend.app.services.walle_agent.tools import QueryGsxParams, query_gsx
+    result = query_gsx(QueryGsxParams(code=code, gsx_appid=gsx_appid, gsx_secret=gsx_secret, gsx_key=gsx_key))
+
+    reply = f"验机结果（{code}）：\n{result}"
+
+    # 写 WalleOrder
+    from backend.app.core.database import SessionLocal as _SL
+    from backend.app.models.walle import WalleOrder
+    from backend.app.core.time import shanghai_now
+    db2 = _SL()
+    try:
+        db2.add(WalleOrder(
+            user_id=user_id,
+            platform_account_id=platform_account_id,
+            app_cid=app_cid,
+            sn_imei=code,
+            coupon_code="",
+            status=0,
+            created_at=shanghai_now(),
+            updated_at=shanghai_now(),
+        ))
+        db2.commit()
+    finally:
+        db2.close()
+
+    _fire_and_forget_reply(user_id, platform_account_id, app_cid, reply)
 
 
 def _auto_ai_suggest(user_id: int, platform_account_id: int, app_cid: str, user_message: str):
@@ -494,23 +736,115 @@ def save_backend_token(
     return {"ok": True}
 
 
+@router.post("/accounts/auto-import")
+def auto_import_eva(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """静默自动导入：优先 CDP，fallback 文件，都没有返回 {ok: False}"""
+    from backend.app.core.config import get_settings
+    eva_dir = get_settings().walle_eva_dir or r"F:\eva"
+    eva_path = f"{eva_dir}/eva_cookies.json"
+    import os, json as _json, urllib.request as _ur
+    cookies: dict = {}
+    try:
+        pages = _json.loads(_ur.urlopen("http://localhost:9222/json", timeout=2).read())
+        ws_url = next(
+            (p["webSocketDebuggerUrl"] for p in pages
+             if "walle.xiaohongshu.com" in p.get("url", "") and "login" not in p.get("url", "") and p.get("type") == "page"),
+            None
+        )
+        if ws_url:
+            import asyncio, websockets as _ws
+            async def _fetch():
+                async with _ws.connect(ws_url) as ws:
+                    await ws.send(_json.dumps({"id": 99, "method": "Network.getCookies", "params": {}}))
+                    for _ in range(30):
+                        msg = _json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+                        if msg.get("id") == 99:
+                            return {c["name"]: c["value"] for c in msg["result"]["cookies"]}
+                return {}
+            raw = asyncio.run(_fetch())
+            if raw.get("walle-eva-auth") or raw.get("walle-eva-bUserId"):
+                keep = ["walle-eva-auth", "walle-eva-bUserId", "access-token-walle.xiaohongshu.com",
+                        "acw_tc", "gid", "websectiga", "xsecappid", "webId", "a1"]
+                cookies = {"cookie_string": "; ".join(f"{k}={raw[k]}" for k in keep if k in raw), "cookies": raw}
+    except Exception:
+        pass
+    if not cookies and os.path.exists(eva_path):
+        try:
+            with open(eva_path, "r", encoding="utf-8") as f:
+                cookies = _json.load(f)
+        except Exception:
+            pass
+    if not cookies:
+        return {"ok": False, "reason": "no_cookie", "login_url": "https://walle.xiaohongshu.com"}
+    inner = cookies.get("cookies") or {}
+    nickname = cookies.get("nickname") or cookies.get("csaName") or "千帆客服工作台"
+    external_id = cookies.get("csaId") or cookies.get("userId") or inner.get("walle-eva-bUserId") or "walle"
+    account, action = upsert_platform_account_from_login(
+        db=db, user_id=current_user.id, platform="xhs", sub_type="walle",
+        user_info={"external_user_id": str(external_id), "nickname": nickname, "avatar_url": ""},
+        cookies_text=cookies.get("cookie_string") or _json.dumps(inner or cookies, ensure_ascii=False),
+    )
+    db.commit()
+    db.refresh(account)
+    return {"ok": True, "action": action, **serialize_account(account, action)}
+
+
 @router.post("/accounts/import-eva")
 def import_eva_account(
     eva_path: str = Query(default=r"F:\eva\eva_cookies.json", description="eva_cookies.json 路径"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """读取 cookie_watcher.py 写入的 eva_cookies.json，绑定千帆客服工作台账号"""
-    import os, json as _json
-    if not os.path.exists(eva_path):
-        raise HTTPException(status_code=400, detail=f"文件不存在: {eva_path}，请先启动 cookie_watcher.py")
-    try:
-        with open(eva_path, "r", encoding="utf-8") as f:
-            cookies = _json.load(f)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"读取文件失败: {e}")
+    """优先从 CDP 9222 实时抓 walle cookie，fallback 读 eva_cookies.json 文件"""
+    import os, json as _json, urllib.request as _ur
 
-    token = cookies.get("token") or cookies.get("AT") or ""
+    cookies: dict = {}
+
+    # 1. 优先从 CDP 实时抓
+    try:
+        pages = _json.loads(_ur.urlopen("http://localhost:9222/json", timeout=2).read())
+        ws_url = next(
+            (p["webSocketDebuggerUrl"] for p in pages
+             if "walle.xiaohongshu.com" in p.get("url", "") and "login" not in p.get("url", "") and p.get("type") == "page"),
+            None
+        )
+        if ws_url:
+            import asyncio, websockets as _ws
+
+            async def _fetch_cookies():
+                async with _ws.connect(ws_url) as ws:
+                    await ws.send(_json.dumps({"id": 99, "method": "Network.getCookies", "params": {}}))
+                    for _ in range(30):
+                        msg = _json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+                        if msg.get("id") == 99:
+                            return {c["name"]: c["value"] for c in msg["result"]["cookies"]}
+                return {}
+
+            raw = asyncio.run(_fetch_cookies())
+            if raw.get("walle-eva-auth") or raw.get("walle-eva-bUserId"):
+                keep = ["walle-eva-auth", "walle-eva-bUserId", "access-token-walle.xiaohongshu.com",
+                        "acw_tc", "gid", "websectiga", "xsecappid", "webId", "a1"]
+                cookie_string = "; ".join(f"{k}={raw[k]}" for k in keep if k in raw)
+                cookies = {
+                    "cookie_string": cookie_string,
+                    "cookies": raw,
+                }
+    except Exception:
+        pass
+
+    # 2. fallback：读文件
+    if not cookies:
+        if not os.path.exists(eva_path):
+            raise HTTPException(status_code=400, detail=f"CDP 未连接且文件不存在: {eva_path}，请先启动 cookie_watcher.py")
+        try:
+            with open(eva_path, "r", encoding="utf-8") as f:
+                cookies = _json.load(f)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"读取文件失败: {e}")
+
     inner = cookies.get("cookies") or {}
     nickname = cookies.get("nickname") or cookies.get("csaName") or "千帆客服工作台"
     external_id = (
@@ -519,9 +853,7 @@ def import_eva_account(
         or inner.get("walle-eva-bUserId")
         or "walle"
     )
-    if not token:
-        auth_val = inner.get("walle-eva-auth") or inner.get("access-token-walle.xiaohongshu.com") or ""
-        token = auth_val
+    token = inner.get("walle-eva-auth") or inner.get("access-token-walle.xiaohongshu.com") or ""
 
     account, action = upsert_platform_account_from_login(
         db=db,

@@ -1,5 +1,15 @@
 import axios from "axios";
-import { message } from "antd";
+import type { MessageInstance } from "antd/es/message/interface";
+
+let _msg: Pick<MessageInstance, "error"> = {
+  error: (content) => { void import("antd").then(({ message }) => { message.error(content); }); },
+};
+
+export function setMessageInstance(msg: Pick<MessageInstance, "error">) {
+  _msg = msg;
+}
+
+const message = { error: (content: string) => _msg.error(content) };
 
 import { fallbackPlatforms } from "./platforms";
 import type {
@@ -85,7 +95,7 @@ import type {
   WalleSyncResult,
 } from "../types";
 
-const http = axios.create({
+export const http = axios.create({
   baseURL: "/api",
   timeout: 120000,
 });
@@ -178,7 +188,7 @@ export async function refreshAccessToken(): Promise<string> {
 
   const response = await http.post<{ access_token: string; token_type: "bearer" }>("/auth/refresh", {
     refresh_token: refreshToken
-  });
+  }, { _authRetry: true } as never);
   setAccessToken(response.data.access_token);
   return response.data.access_token;
 }
@@ -775,7 +785,7 @@ export async function uploadPublishAsset(assetId: number): Promise<PublishAsset>
 }
 
 export async function importXhsCookieAccount(payload: {
-  sub_type: "pc" | "creator" | "qianfan";
+  sub_type: "pc" | "creator" | "qianfan" | "ark";
   cookie_string: string;
   sync_creator?: boolean;
 }): Promise<PlatformAccount> {
@@ -1053,5 +1063,87 @@ export async function fetchWalleEvaConfig(): Promise<{ eva_dir: string }> {
 
 export async function saveWalleEvaConfig(evaDir: string): Promise<{ eva_dir: string }> {
   const response = await http.put<{ eva_dir: string }>("/walle/eva-config", { eva_dir: evaDir });
+  return response.data;
+}
+
+// ── Ark 千帆卖家后台 ────────────────────────────────────────────────────────────
+
+export type ArkServerConfig = {
+  id: number;
+  server_id: string;
+  seller_id?: string;
+  seller_name: string;
+  cookie_file: string;
+  profile_dir: string;
+  enabled: boolean;
+  last_sync_at?: string;
+  created_at: string;
+};
+
+export type ArkProduct = {
+  id: number;
+  server_config_id: number;
+  item_id: string;
+  title: string;
+  card_type: number;
+  card_type_label: string;
+  total_stock: number;
+  sku_count: number;
+  first_sku_id?: string;
+  sale_qty30: number;
+  acc_sale_qty: number;
+  check_status: number;
+  cover_url: string;
+  price_min?: number;
+  price_max?: number;
+  is_auto_off_shelf: boolean;
+  synced_at: string;
+  updated_at: string;
+};
+
+export type ArkProductSku = {
+  sku_id: string;
+  sku_name: string;
+  variants: { name: string; value: string }[];
+  price?: number;
+  stock?: number;
+  delivery_time?: number;
+  delivery_type?: string;
+  spec_image?: string;
+  barcode?: string;
+};
+
+export async function fetchArkServers(): Promise<{ items: ArkServerConfig[] }> {
+  const response = await http.get<{ items: ArkServerConfig[] }>("/ark/servers");
+  return response.data;
+}
+
+export async function importArkServer(payload: { server_id: string; cookie_file?: string; profile_dir?: string }): Promise<ArkServerConfig & { action: string }> {
+  const response = await http.post<ArkServerConfig & { action: string }>("/ark/servers/import-ark", payload);
+  return response.data;
+}
+
+export async function deleteArkServer(configId: number): Promise<{ id: number; status: string }> {
+  const response = await http.delete<{ id: number; status: string }>(`/ark/servers/${configId}`);
+  return response.data;
+}
+
+export async function syncArkProducts(configId: number, cardTypes?: number[]): Promise<{ synced: number; errors: string[]; last_sync_at: string }> {
+  const response = await http.post<{ synced: number; errors: string[]; last_sync_at: string }>(`/ark/servers/${configId}/sync`, { card_types: cardTypes ?? [2, 3, 4, 5, 6, 10] });
+  return response.data;
+}
+
+export async function fetchArkProducts(params?: { server_config_id?: number; card_type?: number; keyword?: string; page?: number; page_size?: number }): Promise<Paginated<ArkProduct>> {
+  const response = await http.get<Paginated<ArkProduct>>("/ark/products", { params });
+  return response.data;
+}
+
+export async function fetchArkProductSkus(productId: number): Promise<{ item_id: string; skus: ArkProductSku[] }> {
+  const response = await http.get<{ item_id: string; skus: ArkProductSku[] }>(`/ark/products/${productId}/skus`);
+  return response.data;
+}
+
+export async function deleteArkProduct(productId: number): Promise<{ id: number; status: string }> {
+  const response = await http.delete<{ id: number; status: string }>(`/ark/products/${productId}`);
   return response.data;
 }

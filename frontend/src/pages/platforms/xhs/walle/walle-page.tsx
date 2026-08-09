@@ -1,5 +1,5 @@
 import { CustomerServiceOutlined, FileTextOutlined, FolderOpenOutlined, KeyOutlined, ReadOutlined, SettingOutlined, ShoppingOutlined, TeamOutlined } from "@ant-design/icons";
-import { Layout, Menu } from "antd";
+import { App, Layout, Menu } from "antd";
 import type { MenuProps } from "antd";
 import { useState } from "react";
 import { WalleAccountsTab } from "./walle-accounts";
@@ -10,10 +10,11 @@ import { WalleKeywordsTab } from "./walle-keywords";
 import { WalleLogsTab } from "./walle-logs";
 import { WalleOrdersTab } from "./walle-orders";
 import { WalleShopConfigTab } from "./walle-shop-config";
+import { ProductsTab } from "../ark/ark-page";
 
 const { Sider, Content } = Layout;
 
-type TabKey = "accounts" | "conversations" | "knowledge" | "keywords" | "orders" | "logs" | "shop-config" | "eva-config";
+type TabKey = "accounts" | "conversations" | "knowledge" | "keywords" | "orders" | "logs" | "shop-config" | "eva-config" | "ark-products";
 
 const menuItems: MenuProps["items"] = [
   { key: "accounts",      icon: <TeamOutlined />,           label: "账号管理" },
@@ -24,12 +25,15 @@ const menuItems: MenuProps["items"] = [
   { key: "logs",          icon: <FileTextOutlined />,        label: "实时日志" },
   { key: "shop-config",   icon: <SettingOutlined />,         label: "AI 配置" },
   { key: "eva-config",    icon: <FolderOpenOutlined />,      label: "EVA 设置" },
+  { type: "divider" },
+  { key: "ark-products",  icon: <ShoppingOutlined />,        label: "商品管理" },
 ];
 
 export function WallePage() {
   const [tab, setTab] = useState<TabKey>("accounts");
 
   return (
+    <App>
     <Layout style={{ minHeight: "calc(100vh - 48px)", background: "transparent" }}>
       <Sider
         width={180}
@@ -37,7 +41,7 @@ export function WallePage() {
         style={{ borderRight: "1px solid #303030", background: "#141414" }}
       >
         <div style={{ padding: "16px 16px 8px", color: "rgba(255,255,255,.45)", fontSize: 11, letterSpacing: 1, textTransform: "uppercase" }}>
-          千帆客服
+          千帆工作台
         </div>
         <Menu
           theme="dark"
@@ -57,7 +61,9 @@ export function WallePage() {
         {tab === "logs"          && <WalleLogsTab />}
         {tab === "shop-config"   && <WalleShopConfigTab />}
         {tab === "eva-config"    && <WalleEvaConfigTab />}
+        {tab === "ark-products"  && <App><ProductsTab acceptSubTypes={["ark", "walle"]} /></App>}
       </Content>
     </Layout>
+    </App>
   );
 }

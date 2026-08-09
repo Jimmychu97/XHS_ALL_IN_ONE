@@ -1,37 +1,41 @@
-import { Alert, Avatar, Button, Card, Col, Empty, message, Modal, Row, Space, Tag, Typography } from "antd";
-import { DeleteOutlined, ImportOutlined, ReloadOutlined, UserOutlined } from "@ant-design/icons";
+import { Avatar, Button, Card, Col, Empty, Modal, Row, Space, Tag, Typography } from "antd";
+import { App } from "antd";
+import { DeleteOutlined, ReloadOutlined, UserOutlined, WarningOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../../../../components/layout/app-shell";
-import { deleteAccount, fetchWalleAccounts, importWalleEvaAccount } from "../../../../lib/api";
+import { deleteAccount, fetchWalleAccounts, http } from "../../../../lib/api";
 import type { PlatformAccount } from "../../../../types";
 
 const { Text } = Typography;
 
+async function autoImport(): Promise<{ ok: boolean; reason?: string; login_url?: string } & Partial<PlatformAccount>> {
+  const res = await http.post<{ ok: boolean; reason?: string; login_url?: string } & Partial<PlatformAccount>>(
+    "/walle/accounts/auto-import"
+  );
+  return res.data;
+}
+
 export function WalleAccountsTab() {
+  const { message } = App.useApp();
   const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
   const [loading, setLoading] = useState(true);
-  const [importing, setImporting] = useState(false);
+  const [noCredential, setNoCredential] = useState(false);
 
-  async function load() {
-    setLoading(true);
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
     try {
+      // 先静默自动导入
+      const result = await autoImport();
+      if (!result.ok && result.reason === "no_cookie") {
+        setNoCredential(true);
+      } else {
+        setNoCredential(false);
+      }
+      // 再拉账号列表
       const res = await fetchWalleAccounts();
       setAccounts(res.items);
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function handleImport() {
-    setImporting(true);
-    try {
-      await importWalleEvaAccount();
-      message.success("千帆客服工作台账号已绑定");
-      void load();
-    } catch {
-      message.error("导入失败，请确认 cookie_watcher.py 已运行且 F:\\eva\\eva_cookies.json 存在");
-    } finally {
-      setImporting(false);
     }
   }
 
@@ -56,30 +60,43 @@ export function WalleAccountsTab() {
       <PageHeader
         eyebrow="千帆客服"
         title="账号管理"
-        description="绑定千帆客服工作台账号，需先运行 cookie_watcher.py 保活脚本"
+        description="自动读取 cookie_watcher.py 保存的凭证，无需手动操作"
         action={
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
-            <Button type="primary" icon={<ImportOutlined />} loading={importing} onClick={handleImport}>
-              导入凭证
-            </Button>
+            <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>刷新</Button>
           </Space>
         }
       />
 
-      <Alert
-        type="info"
-        showIcon
-        title="使用前请先启动保活脚本"
-        description={<code>python F:\eva\cookie_watcher.py</code>}
-        style={{ marginBottom: 24 }}
-      />
+      {noCredential && (
+        <Card
+          style={{ marginBottom: 24, borderColor: "#faad14", background: "#2a1f00" }}
+          size="small"
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <WarningOutlined style={{ color: "#faad14", fontSize: 20 }} />
+            <div style={{ flex: 1 }}>
+              <Text strong style={{ color: "#faad14" }}>未检测到千帆客服凭证</Text>
+              <br />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                请确认 cookie_watcher.py 已运行，或手动打开工作台登录后刷新
+              </Text>
+            </div>
+            <Button
+              size="small"
+              onClick={() => window.open("https://walle.xiaohongshu.com", "_blank")}
+            >
+              打开工作台
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {accounts.length === 0 && !loading ? (
         <Empty
           image={<UserOutlined style={{ fontSize: 48, color: "rgba(255,255,255,0.25)" }} />}
           imageStyle={{ height: 64 }}
-          description={<Text style={{ color: "rgba(255,255,255,0.45)" }}>暂无绑定账号，点击「导入凭证」读取 eva_cookies.json</Text>}
+          description={<Text style={{ color: "rgba(255,255,255,0.45)" }}>暂无绑定账号</Text>}
         />
       ) : (
         <Row gutter={[16, 16]}>

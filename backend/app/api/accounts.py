@@ -32,7 +32,7 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 class CookieImportRequest(BaseModel):
     platform: str = Field(pattern="^xhs$")
-    sub_type: str = Field(pattern="^(pc|creator|qianfan)$")
+    sub_type: str = Field(pattern="^pc$")
     cookie_string: str = Field(min_length=3)
     sync_creator: bool = False
 
@@ -111,41 +111,30 @@ def import_cookie(
     creator_adapter: XhsCreatorLoginAdapter = Depends(get_creator_account_adapter),
     self_profile_adapter: XhsSelfProfileAdapter = Depends(get_xhs_self_profile_adapter),
 ):
-    if payload.sub_type == "qianfan":
-        account, action = upsert_platform_account_from_login(
-            db=db,
-            user_id=current_user.id,
-            platform=payload.platform,
-            sub_type="qianfan",
-            user_info={"external_user_id": "qianfan", "nickname": "千帆账号", "avatar_url": ""},
-            cookies_text=payload.cookie_string,
-        )
-        db.commit()
-        db.refresh(account)
-        return serialize_account(account, action)
+    if payload.sub_type != "pc":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持 PC 账号")
 
-    adapter = _select_adapter(payload.sub_type, pc_adapter, creator_adapter)
+    adapter = pc_adapter
     try:
-        user_info = adapter.get_user_info(trans_cookies(payload.cookie_string))
+        user_info = pc_adapter.get_user_info(trans_cookies(payload.cookie_string))
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cookie is invalid or expired") from exc
 
-    if payload.sub_type == "pc":
-        try:
-            self_profile = self_profile_adapter.get_self_profile(cookie_header_from_text(payload.cookie_string))
-            user_info = enrich_user_info_with_xhs_self_profile(user_info, self_profile)
-        except Exception:
-            pass
+    try:
+        self_profile = self_profile_adapter.get_self_profile(cookie_header_from_text(payload.cookie_string))
+        user_info = enrich_user_info_with_xhs_self_profile(user_info, self_profile)
+    except Exception:
+        pass
 
     account, action = upsert_platform_account_from_login(
         db=db,
         user_id=current_user.id,
         platform=payload.platform,
-        sub_type=payload.sub_type,
+        sub_type="pc",
         user_info=user_info,
         cookies_text=payload.cookie_string,
     )
-    if payload.sub_type == "pc" and payload.sync_creator:
+    if payload.sync_creator:
         _sync_creator_account_from_pc_cookie(
             db=db,
             user_id=current_user.id,
@@ -183,17 +172,17 @@ def check_account(
         db.refresh(account)
         return serialize_account(account)
 
-    adapter = _select_adapter(account.sub_type or "pc", pc_adapter, creator_adapter)
+    if account.sub_type != "pc":
+        account.status = "active"
+        account.status_message = ""
+        account.updated_at = shanghai_now()
+        db.commit()
+        db.refresh(account)
+        return serialize_account(account)
+
     try:
         cookies_text = decrypt_text(cookie_version.encrypted_cookies)
-        if account.sub_type == "qianfan":
-            account.status = "active"
-            account.status_message = ""
-            account.updated_at = shanghai_now()
-            db.commit()
-            db.refresh(account)
-            return serialize_account(account)
-        user_info = adapter.get_user_info(decode_cookie_text(cookies_text))
+        user_info = pc_adapter.get_user_info(decode_cookie_text(cookies_text))
         try:
             self_profile = self_profile_adapter.get_self_profile(cookie_header_from_text(cookies_text))
             user_info = enrich_user_info_with_xhs_self_profile(user_info, self_profile)
@@ -206,19 +195,6 @@ def check_account(
         account.external_user_id = user_info.get("external_user_id", account.external_user_id)
         account.profile_json = json.dumps(account_profile_from_user_info(user_info), ensure_ascii=False, separators=(",", ":"))
         account.updated_at = shanghai_now()
-
-        if account.sub_type == "creator":
-            try:
-                from apis.xhs_creator_apis import XHS_Creator_Apis
-                creator_cookies = decode_cookie_text(cookies_text)
-                api = XHS_Creator_Apis()
-                success, msg, _ = api.get_fileIds("image", creator_cookies)
-                if not success:
-                    account.status = "expired"
-                    account.status_message = f"上传凭证获取失败: {msg}"
-            except Exception as upload_exc:
-                account.status = "expired"
-                account.status_message = f"上传凭证验证异常: {upload_exc}"
     except Exception as exc:
         account.status = "expired"
         account.status_message = str(exc)

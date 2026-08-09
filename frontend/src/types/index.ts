@@ -48,7 +48,7 @@ export type AuthPayload = AuthTokens & {
 export type PlatformAccount = {
   id: number;
   platform: PlatformId;
-  sub_type: "pc" | "creator" | null;
+  sub_type: "pc" | "creator" | "qianfan" | "walle" | "ark" | null;
   external_user_id?: string;
   nickname: string;
   avatar_url?: string;
@@ -782,6 +782,58 @@ export type WalleSyncResult = {
   msg?: string;
   conversations: number;
   messages: number;
+};
+
+// ── Ark 千帆卖家后台 ──────────────────────────────────────────
+export type ArkServerConfig = {
+  id: number;
+  server_id: string;
+  seller_id: string | null;
+  seller_name: string;
+  cookie_file: string;
+  profile_dir: string;
+  enabled: boolean;
+  last_sync_at: string | null;
+  created_at: string;
+  action?: string;
+};
+
+export type ArkServerConfigPayload = {
+  server_id: string;
+  seller_name?: string;
+  cookie_file?: string;
+  profile_dir?: string;
+  enabled?: boolean;
+};
+
+export type ArkProduct = {
+  id: number;
+  server_config_id: number;
+  item_id: string;
+  title: string;
+  card_type: number;
+  card_type_label: string;
+  total_stock: number;
+  sku_count: number;
+  first_sku_id: string | null;
+  sale_qty30: number;
+  acc_sale_qty: number;
+  check_status: number;
+  cover_url: string;
+  price_min: number | null;
+  price_max: number | null;
+  is_auto_off_shelf: boolean;
+  synced_at: string;
+  updated_at: string;
+  raw_json?: Record<string, unknown>;
+};
+
+export type ArkSyncResult = {
+  synced: number;
+  errors: string[];
+  last_sync_at: string;
+  sku_sync?: string;
+  sku_sync_reason?: string;
 };
 
 // ── AppNotification ──────────────────────────────────────────

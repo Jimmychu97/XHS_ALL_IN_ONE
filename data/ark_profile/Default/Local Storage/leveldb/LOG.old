@@ -1,0 +1,17 @@
+2026/08/09-15:33:56.942 52d4 Reusing MANIFEST F:\XHS_ALL_IN_ONE\data\ark_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/08/09-15:33:56.947 52d4 Recovering log #227
+2026/08/09-15:33:56.948 52d4 Level-0 table #230: started
+2026/08/09-15:33:56.952 52d4 Level-0 table #230: 19783 bytes OK
+2026/08/09-15:33:56.955 52d4 Delete type=0 #227
+2026/08/09-15:35:57.201 579c Level-0 table #233: started
+2026/08/09-15:35:57.205 579c Level-0 table #233: 25337 bytes OK
+2026/08/09-15:35:57.207 579c Delete type=0 #231
+2026/08/09-15:35:57.207 52d4 Compacting 4@0 + 1@1 files
+2026/08/09-15:35:57.211 52d4 Generated table #234@0: 40 keys, 17640 bytes
+2026/08/09-15:35:57.211 52d4 Compacted 4@0 + 1@1 files => 17640 bytes
+2026/08/09-15:35:57.212 52d4 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/08/09-15:35:57.212 52d4 Delete type=2 #223
+2026/08/09-15:35:57.212 52d4 Delete type=2 #225
+2026/08/09-15:35:57.212 52d4 Delete type=2 #228
+2026/08/09-15:35:57.212 52d4 Delete type=2 #230
+2026/08/09-15:35:57.212 52d4 Delete type=2 #233

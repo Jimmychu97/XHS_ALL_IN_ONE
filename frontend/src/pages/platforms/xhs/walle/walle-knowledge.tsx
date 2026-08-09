@@ -6,7 +6,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../../../../components/layout/app-shell";
 import {
-  createWalleKnowledge, deleteWalleKnowledge, fetchAccounts,
+  createWalleKnowledge, deleteWalleKnowledge, fetchWalleAccounts,
   fetchWalleKnowledge, updateWalleKnowledge,
 } from "../../../../lib/api";
 import type { PlatformAccount, WalleKnowledge } from "../../../../types";
@@ -23,9 +23,9 @@ export function WalleKnowledgeTab() {
   const [form] = Form.useForm();
 
   useEffect(() => {
-    fetchAccounts("xhs").then((list) => {
-      setAccounts(list);
-      if (list[0]) setAccountId(list[0].id);
+    fetchWalleAccounts().then((res) => {
+      setAccounts(res.items);
+      if (res.items[0]) setAccountId(res.items[0].id);
     });
   }, []);
 

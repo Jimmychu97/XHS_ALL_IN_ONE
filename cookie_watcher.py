@@ -34,6 +34,7 @@ BACKEND_TOKEN_FILE = _EVA_DIR / "backend_token.txt"
 CDP_URL = f"http://localhost:{_args.cdp_port}"
 WALLE_SAVE = _EVA_DIR / "eva_cookies.json"
 EDITH_SAVE = _EVA_DIR / "edith_auth.json"
+ARK_COOKIE_SAVE = pathlib.Path("data/ark_cookies.json")
 
 print(f"[配置] eva目录={_EVA_DIR}  后端={BACKEND_BASE}  CDP端口={_args.cdp_port}  发消息端口={_args.send_port}")
 
@@ -129,6 +130,30 @@ def save_edith_auth(auth: str):
     print(f"[{time.strftime('%H:%M:%S')}] edith a1: token 已保存")
 
 
+_last_ark_at_token = ""
+
+
+def _save_ark_at_token(at_token: str):
+    """AT-xxx token 写入 ark_cookies.json，不重复写相同的"""
+    global _last_ark_at_token
+    if at_token == _last_ark_at_token:
+        return
+    _last_ark_at_token = at_token
+    ARK_COOKIE_SAVE.parent.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if ARK_COOKIE_SAVE.exists():
+        try:
+            existing = json.loads(ARK_COOKIE_SAVE.read_text("utf-8"))
+        except Exception:
+            pass
+    existing["at_token"] = at_token
+    existing["updated_at"] = int(time.time())
+    ARK_COOKIE_SAVE.write_text(
+        json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"[{time.strftime('%H:%M:%S')}] ark AT token 已保存")
+
+
 def get_all_pages() -> list[dict]:
     return json.loads(urllib.request.urlopen(f"{CDP_URL}/json").read())
 
@@ -139,6 +164,100 @@ def find_workbench_ws() -> str:
         if "walle.xiaohongshu.com" in url and "login" not in url and p.get("type") == "page":
             return p["webSocketDebuggerUrl"]
     raise RuntimeError("找不到工作台页面，请确认客服工作台已启动并登录")
+
+
+def find_ark_ws() -> str | None:
+    """找 ark.xiaohongshu.com 页面的 WS 地址，没开则返回 None"""
+    try:
+        for p in get_all_pages():
+            if "ark.xiaohongshu.com" in p.get("url", "") and p.get("type") == "page":
+                return p["webSocketDebuggerUrl"]
+    except Exception:
+        pass
+    return None
+
+
+async def extract_and_save_ark_cookies() -> bool:
+    """从 CDP 抓 ark cookie + AT token 写入 data/ark_cookies.json，成功返回 True"""
+    ws_url = find_ark_ws()
+    if ws_url:
+        # ark 页面开着，直接抓
+        try:
+            async with websockets.connect(ws_url) as ws:
+                await ws.send(json.dumps({"id": 88, "method": "Network.getCookies", "params": {}}))
+                await ws.send(json.dumps({
+                    "id": 89, "method": "Runtime.evaluate",
+                    "params": {
+                        "expression": "JSON.stringify({token: localStorage.getItem('token') || localStorage.getItem('accessToken') || '', keys: Object.keys(localStorage)})",
+                        "returnByValue": True,
+                    }
+                }))
+                raw_cookies = None
+                at_token = ""
+                got = set()
+                for _ in range(60):
+                    msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+                    if msg.get("id") == 88:
+                        raw_cookies = msg["result"]["cookies"]
+                        got.add(88)
+                    elif msg.get("id") == 89:
+                        val = msg.get("result", {}).get("result", {}).get("value", "{}")
+                        try:
+                            ls = json.loads(val)
+                            at_token = ls.get("token", "")
+                            if not at_token:
+                                print(f"[{time.strftime('%H:%M:%S')}] ark localStorage keys: {ls.get('keys', [])}")
+                        except Exception:
+                            pass
+                        got.add(89)
+                    if got == {88, 89}:
+                        break
+                if raw_cookies is None:
+                    return False
+                playwright_cookies = [
+                    {"name": c["name"], "value": c["value"],
+                     "domain": c.get("domain", ""), "path": c.get("path", "/")}
+                    for c in raw_cookies
+                    if "xiaohongshu.com" in c.get("domain", "")
+                ]
+                if not at_token:
+                    for c in raw_cookies:
+                        if c["value"].startswith("AT-"):
+                            at_token = c["value"]
+                            break
+                _do_save_ark_cookies(playwright_cookies, at_token)
+                return True
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] ark cookie 抓取失败: {e}")
+        return False
+    else:
+        # ark 页面没开，通过 walle 页面发一个 ark 请求来触发 AT token 被动捕获
+        # 实际 AT token 会通过 Network.requestWillBeSentExtraInfo 被 _save_ark_at_token 捕获
+        # 这里只需返回当前是否已有有效 token
+        if ARK_COOKIE_SAVE.exists():
+            try:
+                data = json.loads(ARK_COOKIE_SAVE.read_text("utf-8"))
+                return bool(data.get("at_token"))
+            except Exception:
+                pass
+        return False
+
+
+def _do_save_ark_cookies(playwright_cookies: list, at_token: str):
+    ARK_COOKIE_SAVE.parent.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if ARK_COOKIE_SAVE.exists():
+        try:
+            existing = json.loads(ARK_COOKIE_SAVE.read_text("utf-8"))
+        except Exception:
+            pass
+    existing["playwright_cookies"] = playwright_cookies
+    existing["at_token"] = at_token
+    existing["updated_at"] = int(time.time())
+    ARK_COOKIE_SAVE.write_text(
+        json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"[{time.strftime('%H:%M:%S')}] ark cookie 已保存 ({len(playwright_cookies)} 条, at_token={'有' if at_token else '无'})")
 
 
 async def extract_walle_cookies(ws) -> str | None:
@@ -363,8 +482,15 @@ async def watch():
 
         last_walle_save = time.time()
         last_edith_auth = ""
+        last_ark_save = 0.0
         pending_requests: dict = {}
         _next_id = 1000
+
+        # 启动时主动触发一次 ark 请求，让 Electron 注入 AT token 被 requestWillBeSentExtraInfo 捕获
+        await ws.send(json.dumps({"id": 97, "method": "Runtime.evaluate", "params": {
+            "expression": "fetch('https://ark.xiaohongshu.com/api/edith/seller/info/v2').catch(()=>{})",
+            "awaitPromise": False,
+        }}))
 
         while True:
             try:
@@ -432,13 +558,16 @@ async def watch():
                 except Exception as e:
                     print(f"[{time.strftime('%H:%M:%S')}] WS帧解析失败: {e}")
 
-            # ── Electron 注入的 a1: token ──
+            # ── Electron 注入的 a1: token 和 ark AT token ──
             elif method == "Network.requestWillBeSentExtraInfo":
                 headers = msg["params"].get("headers", {})
                 auth = headers.get("authorization", "") or headers.get("Authorization", "")
                 if auth and auth.startswith("a1:") and auth != last_edith_auth:
                     last_edith_auth = auth
                     save_edith_auth(auth)
+                # 捕获发往 ark 的 AT token
+                if auth and auth.startswith("AT-"):
+                    _save_ark_at_token(auth)
 
             # ── HTTP 响应：impaas batch 接口补充历史消息 ──
             elif method == "Network.responseReceived":
@@ -493,6 +622,16 @@ async def watch():
                 if cookie_string:
                     save_walle_cookies(cookie_string)
                     last_walle_save = time.time()
+
+        # ark cookie 每 10 分钟刷新一次
+        if time.time() - last_ark_save > 600:
+            # 用现有 ws 连接在 walle 页面里执行 fetch ark，触发 Electron 注入 AT token
+            _next_id += 1
+            await ws.send(json.dumps({"id": _next_id, "method": "Runtime.evaluate", "params": {
+                "expression": "fetch('https://ark.xiaohongshu.com/api/edith/seller/info/v2').catch(()=>{})",
+                "awaitPromise": False,
+            }}))
+            last_ark_save = time.time()
 
 
 async def main():

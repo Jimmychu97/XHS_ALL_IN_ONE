@@ -2,6 +2,13 @@ import { App, ConfigProvider, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { setMessageInstance } from "../lib/api";
+
+function MessageInjector() {
+  const { message } = App.useApp();
+  useEffect(() => { setMessageInstance(message); }, [message]);
+  return null;
+}
 
 type ThemeMode = "dark" | "light";
 
@@ -76,7 +83,7 @@ export function AppProviders({ children }: AppProvidersProps) {
           components: isDark ? darkComponents : lightComponents,
         }}
       >
-        <App>{children}</App>
+        <App><MessageInjector />{children}</App>
       </ConfigProvider>
     </ThemeContext.Provider>
   );

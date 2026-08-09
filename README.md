@@ -284,15 +284,128 @@ WalleEvaAPI（直接调用接口）
 
 ---
 
+## 🏪 千帆卖家后台 SDK（ark.xiaohongshu.com）
+
+`ark.xiaohongshu.com` 是小红书商家的卖家后台（千帆平台），提供商品管理、订单管理、数据看板等功能。项目通过 Playwright 抓包逆向，封装了完整的卖家后台 SDK。
+
+### 工作原理
+
+```
+ark_capture.py（Playwright 持久化浏览器）
+    ↓ 登录后保存 cookies 到 data/ark_cookies.json
+ArkAPI（通过 CDP 让页面自身发签名请求）
+    ↓ 自动携带 x-s / x-t / authorization
+ark.xiaohongshu.com 接口
+```
+
+### 第一步：抓包 & 登录（仅首次需要）
+
+```bash
+pip install playwright
+playwright install chromium
+python ark_capture.py
+```
+
+脚本会打开浏览器，**在浏览器里手动登录**千帆卖家后台。登录后随意点击页面，终端会实时打印所有 API 请求和响应。按 `Ctrl+C` 退出，cookies 自动保存到 `data/ark_cookies.json`。
+
+> 之后再运行时浏览器会自动复用登录态，无需重复登录。
+
+### 第二步：调用 SDK
+
+```python
+from apis.xhs_walle_eva_apis import ArkAPI
+
+api = ArkAPI()  # 需要 ark 浏览器页面保持打开（CDP 通过页面自身签名）
+
+# 卖家基础信息
+success, msg, res = api.get_seller_info_v2()
+print(res["data"]["user_name"])  # 店铺名
+
+# 首页实时指标（GMV / 点击 / 加购）
+success, msg, res = api.get_key_metric_realtime()
+
+# 待办事项（待发货数 / 待售后数）
+success, msg, res = api.get_todolist()
+
+# 商品列表（在售）
+success, msg, res = api.search_items(card_type=2, page_size=20)
+for item in res["data"]["items"]:
+    print(item["item_id"], item["total_stock"])
+
+# 各状态商品数量统计
+success, msg, res = api.get_item_count()
+
+# 缺货商品
+success, msg, res = api.get_out_of_inventory_items()
+
+# 未读消息数
+success, msg, res = api.get_unread_count()
+```
+
+### ArkAPI 完整方法列表
+
+| 方法 | 接口 | 说明 |
+|---|---|---|
+| `get_seller_info_v2()` | GET `/api/edith/seller/info/v2` | 卖家信息（角色/状态/品牌分） |
+| `get_seller_info()` | GET `/api/edith/seller/get_seller_info` | 店铺类型枚举 |
+| `get_shop_score()` | POST `/api/edith/home/get_shop_score` | 店铺综合评分 |
+| `get_todolist()` | GET `/edith/api/seller/todolist` | 待发货/待售后数量 |
+| `get_menu_tree()` | GET `/api/edith/juliet/uno/get_menu_tree` | 完整菜单树 |
+| `get_sidebar()` | GET `/api/edith/bench/sidebar` | 侧边栏菜单 |
+| `get_key_metric_realtime()` | POST `/edith/api/seller/home/key_metric_realtime` | 实时 GMV/点击/加购 |
+| `search_items(card_type, ...)` | POST `/api/edith/product/search_item_v2` | 商品列表（支持分页/筛选/关键词） |
+| `get_item_count()` | POST `/api/edith/product/seller_item_count` | 各状态商品数量 |
+| `get_common_config()` | POST `/api/edith/product/get_common_config` | 商品功能开关配置 |
+| `get_logistics_info()` | POST `/api/edith/product/get_logistics_info` | 物流方案列表 |
+| `get_delivery_time_rule()` | POST `/api/edith/product/get_delivery_time_rule` | 发货时效规则 |
+| `check_freeze()` | POST `/api/edith/product/check_freeze` | 店铺是否被冻结 |
+| `get_out_of_inventory_items()` | GET `/api/edith/product/stock/getout_of_inventory_item` | 缺货商品列表 |
+| `get_inventory_gray_config()` | GET `/api/edith/inventory/gray_config` | 库存灰度配置 |
+| `get_seller_property_hosting_status()` | GET `/api/edith/product/seller_property_hosting_status` | 属性托管状态 |
+| `get_item_list_resource_card()` | POST `/api/edith/product/get_item_list_resource_card` | 列表资源卡片 |
+| `get_unread_count()` | GET `/api/edith/open/message/v2/unread-count` | 未读消息数 |
+| `get_important_msgs()` | GET `/api/edith/open/message/v2/important-msgs` | 重要消息列表 |
+| `get_latest_group_msgs()` | POST `/api/edith/open/message/latest_group_mgs` | 最新分组消息 |
+
+`search_items` 的 `card_type` 枚举：
+
+| 值 | 含义 |
+|---|---|
+| `2` | 在售 |
+| `3` | 仓库中 |
+| `4` | 已售罄 |
+| `5` | 审核中 |
+| `6` | 已下架 |
+| `10` | 违规下架 |
+
+### 数据文件
+
+| 文件 | 说明 |
+|---|---|
+| `data/ark_cookies.json` | ark 登录 cookies（Playwright 保存，自动复用） |
+| `data/ark_profile/` | Playwright 持久化浏览器 profile（保留登录态） |
+
+---
+
 ## 📁 项目结构
 
 ```
 XHS_ALL_IN_ONE/
 ├── main.py                         # 统一启动入口
+├── ark_capture.py                  # Playwright 抓包工具 — 登录 ark 并实时打印 API 请求
+├── cookie_watcher.py               # CDP 凭证保活服务 — 维护千帆客服工作台 token
 ├── config/                         # YAML 配置（default / production）
 ├── apis/                           # XHS 底层 SDK（逆向签名 + HTTP 接口）
+│   ├── xhs_pc_apis.py              # 小红书 PC 端接口
+│   ├── xhs_creator_apis.py         # 创作者平台接口
+│   ├── xhs_walle_eva_apis.py       # 千帆客服工作台 SDK（WalleEvaAPI + ArkAPI）
+│   └── ...                         # 蒲公英、千帆分销等
 ├── xhs_utils/                      # 签名算法封装
 ├── static/                         # 签名核心 JS 文件
+├── data/                           # 运行时数据（自动创建）
+│   ├── spider_xhs.db               # SQLite 数据库
+│   ├── ark_cookies.json            # ark 登录 cookies（ark_capture.py 保存）
+│   └── ark_profile/                # Playwright 持久化浏览器 profile
 ├── backend/
 │   └── app/
 │       ├── main.py                 # FastAPI 应用

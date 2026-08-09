@@ -11,6 +11,7 @@ from backend.app.models.publish import PublishAsset, PublishJob
 from backend.app.models.task import Task
 from backend.app.models.user import User
 from backend.app.models.walle import WalleAgentSession, WalleConversation, WalleKeyword, WalleKnowledge, WalleMessage, WalleOrder, WalleShopConfig
+from backend.app.models.ark import ArkServerConfig, ArkProduct
 
 __all__ = [
     "AccountCookieVersion",
@@ -42,5 +43,7 @@ __all__ = [
     "WalleMessage",
     "WalleOrder",
     "WalleShopConfig",
+    "ArkServerConfig",
+    "ArkProduct",
     "note_tags",
 ]

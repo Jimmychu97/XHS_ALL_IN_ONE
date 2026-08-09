@@ -42,7 +42,7 @@ def start_frontend(port: int) -> Optional[subprocess.Popen]:
 
     command = build_frontend_command(port)
     print(f"Starting frontend at http://127.0.0.1:{port}")
-    return subprocess.Popen(command, cwd=str(frontend_dir))
+    return subprocess.Popen(command, cwd=str(frontend_dir), stdout=sys.stdout, stderr=sys.stderr)
 
 
 def start_cookie_watcher() -> Optional[subprocess.Popen]:
@@ -71,6 +71,14 @@ def start_cookie_watcher() -> Optional[subprocess.Popen]:
     return subprocess.Popen(cmd)
 
 
+def start_ark_capture() -> Optional[subprocess.Popen]:
+    ark_capture = ROOT / "ark_capture.py"
+    if not ark_capture.exists():
+        return None
+    print("Starting ark_capture.py --daemon")
+    return subprocess.Popen([sys.executable, str(ark_capture), "--daemon"])
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
 
@@ -90,6 +98,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     frontend_process = start_frontend(args.frontend_port) if args.with_frontend else None
     watcher_process = start_cookie_watcher()
+    ark_process = start_ark_capture()
 
     print(f"Starting backend at http://{host}:{port}")
     try:
@@ -100,6 +109,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             frontend_process.terminate()
         if watcher_process and watcher_process.poll() is None:
             watcher_process.terminate()
+        if ark_process and ark_process.poll() is None:
+            ark_process.terminate()
     return 0
 
 

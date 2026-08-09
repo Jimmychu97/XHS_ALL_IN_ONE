@@ -24,6 +24,7 @@ import { XhsPublishPage } from "../pages/platforms/xhs/publish-page";
 import { XhsVideoStudioPage } from "../pages/platforms/xhs/video-studio-page";
 import { QianFanPage } from "../pages/platforms/xhs/qianfan-page";
 import { WallePage } from "../pages/platforms/xhs/walle/walle-page";
+import { ArkPage } from "../pages/platforms/xhs/ark/ark-page";
 import { XhsSectionPage } from "../pages/platforms/xhs/xhs-section-page";
 
 export function AppRouter() {
@@ -77,6 +78,7 @@ export function AppRouter() {
           <Route path="/platforms/xhs/auto-ops" element={<AutoOpsPage />} />
           <Route path="/platforms/xhs/qianfan" element={<QianFanPage />} />
           <Route path="/platforms/xhs/walle" element={<WallePage />} />
+          <Route path="/platforms/xhs/ark" element={<ArkPage />} />
           <Route path="/platforms/xhs/:section" element={<XhsSectionPage />} />
           <Route path="/tasks" element={<TaskCenterPage />} />
           <Route path="/models" element={<ModelConfigPage />} />

@@ -2,7 +2,7 @@ import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Input, Popconfirm, Select, Space, Tag, message } from "antd";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../../../../components/layout/app-shell";
-import { createWalleKeyword, deleteWalleKeyword, fetchAccounts, fetchWalleKeywords } from "../../../../lib/api";
+import { createWalleKeyword, deleteWalleKeyword, fetchWalleAccounts, fetchWalleKeywords } from "../../../../lib/api";
 import type { PlatformAccount, WalleKeyword } from "../../../../types";
 
 export function WalleKeywordsTab() {
@@ -13,9 +13,9 @@ export function WalleKeywordsTab() {
   const [adding, setAdding] = useState(false);
 
   useEffect(() => {
-    fetchAccounts("xhs").then((list) => {
-      setAccounts(list);
-      if (list[0]) setAccountId(list[0].id);
+    fetchWalleAccounts().then((res) => {
+      setAccounts(res.items);
+      if (res.items[0]) setAccountId(res.items[0].id);
     });
   }, []);
 

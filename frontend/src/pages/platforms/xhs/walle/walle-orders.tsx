@@ -2,7 +2,7 @@ import { Select, Space, Table, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../../../../components/layout/app-shell";
-import { fetchAccounts, fetchWalleOrders } from "../../../../lib/api";
+import { fetchWalleAccounts, fetchWalleOrders } from "../../../../lib/api";
 import type { PlatformAccount, WalleOrder } from "../../../../types";
 
 const STATUS_MAP: Record<number, { label: string; color: string }> = {
@@ -21,9 +21,9 @@ export function WalleOrdersTab() {
   const [page, setPage] = useState(1);
 
   useEffect(() => {
-    fetchAccounts("xhs").then((list) => {
-      setAccounts(list);
-      if (list[0]) setAccountId(list[0].id);
+    fetchWalleAccounts().then((res) => {
+      setAccounts(res.items);
+      if (res.items[0]) setAccountId(res.items[0].id);
     });
   }, []);
 

@@ -1,5 +1,7 @@
-__pycache__
-node_modules/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
 *.so
 .Python
 build/
@@ -16,26 +18,71 @@ wheels/
 MANIFEST
 *.manifest
 *.spec
-.cache
-*.log
-local_settings.py
-db.sqlite3
-*.db
-*.db-journal
-backend/app/storage/
-__pypackages__/
+
+# Virtual environments
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Node
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment & secrets
 .env
-.claude
+.env.local
+*.pem
+*.key
+
+# Logs
+*.log
+data/logs/
+
+# Databases
+*.db
+*.db-journal
+db.sqlite3
+
+# Local settings
+local_settings.py
+
+# Cache
+.cache/
+__pypackages__/
+
+# Project-specific
+backend/app/storage/
+docx/
+
+# AI/Agent tools
+.claude/
 CLAUDE.md
 AGENTS.md
 .agent
-.idea
 .superpowers
-.pytest_cache
-docx
+
+# Playwright browser profiles
+data/ark_profile/
+
+# User data (cookies, credentials)
+data/ark_cookies.json
+data/cookies/
+data/*.txt
+
+# Temporary files
+*.tmp
+*.temp
+*.bak

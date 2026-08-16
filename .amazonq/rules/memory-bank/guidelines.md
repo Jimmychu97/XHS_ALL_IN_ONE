@@ -1,347 +1,342 @@
-# XHS_ALL_IN_ONE — Development Guidelines
+# Development Guidelines
 
-## Python Code Patterns
+## Code Quality Standards
 
-### SDK Return Convention (100% of apis/)
-All SDK methods return a 3-tuple `(success: bool, msg: str, res_json: dict | None)`:
+### Python Backend Standards
+
+**Testing Patterns** (from `test_api.py`):
+- Use FastAPI TestClient for endpoint testing
+- Mock external adapters with fake implementations using dependency injection
+- Test authentication, authorization, and ownership enforcement
+- Use `tmp_path` fixture for SQLite test databases
+- Verify database state after operations with direct ORM queries
+- Test cross-user access denial as critical security tests
+- Use helper functions to reduce test boilerplate (`_override_database`, `_register_and_get_access_token`, `_create_pc_account_with_cookie`)
+- Always commit database changes in tests before asserting state
+- Clean up dependency overrides in finally blocks
+
+**API Design Patterns** (from `walle.py`):
+- Use router prefix for resource grouping
+- Implement SSE (Server-Sent Events) for real-time data streams with `StreamingResponse`
+- Store in-memory log buffers with size limits (`deque(maxlen=200)`)
+- Use background threads for long-running operations (`threading.Thread(target=..., daemon=True)`)
+- Parse timestamps from multiple formats defensively
+- Normalize data from external APIs before storage
+- Use `try-except` with specific error handling, log exceptions
+- Return consistent response structure (`{"ok": bool, ...}`)
+
+**Service Layer** (from `scheduler_service.py`):
+- Separate business logic from API routes
+- Use SessionLocal for background tasks with proper cleanup
+- Implement idempotent operations for scheduled jobs
+- Handle exceptions gracefully without breaking scheduler
+- Use logging for debugging and monitoring
+- Implement helper functions for data transformation
+- Secure credentials with decrypt_text before use
+- Validate ownership before operations
+
+### SDK Layer Standards (from `xhs_pc_apis.py`)
+
+**Class Design**:
+- Initialize with base_url as instance variable
+- Accept cookies_str as parameter to methods (stateless authentication)
+- Return consistent `(success: bool, msg: str, res_json: dict)` tuples
+- Use docstrings for API method documentation
+- Implement pagination helpers that call single-page methods
+- Parse URLs defensively with urllib.parse
+- Extract query parameters for xsec_token and xsec_source
+
+**HTTP Client Usage**:
+- Always use `generate_request_params()` for signature generation
+- Set proper headers including x-rap-param for search endpoints
+- Use UTF-8 encoding for POST request bodies
+- Handle JSON parsing exceptions
+- Log errors with loguru logger
+- Use REQUEST_TIMEOUT constant for consistency
+
+**Data Normalization**:
+- Extract note_id from URL path
+- Parse xsec_token/xsec_source from query parameters
+- Convert cookie JSON strings to header format
+- Handle multiple field name variations (likes/liked_count)
+
+### Frontend TypeScript Standards (from `index.ts`)
+
+**Type Definitions**:
+- Export all types at module level
+- Use union types for status enums (`"active" | "paused" | "expired"`)
+- Use Partial<T> for update payloads
+- Include both API response types and request payload types
+- Document timestamp fields as `string | null` (ISO format from backend)
+- Use `Record<string, unknown>` for flexible JSON fields
+- Group related types by feature (Walle, Ark, Publishing)
+
+**Naming Conventions**:
+- Use PascalCase for type names
+- Use camelCase for type properties
+- Add "Payload" suffix for request types
+- Add "Response" suffix for API response wrappers
+- Use descriptive names: `XhsSearchNote`, `MonitoringTarget`, `PublishJob`
+
+## Architectural Patterns
+
+### Dependency Injection Pattern
 ```python
-def get_note_info(self, url: str, cookies_str: str) -> tuple[bool, str, dict]:
-    res_json = None
+# FastAPI route with dependency overrides for testing
+@router.get("/items")
+def list_items(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Business logic
+    pass
+
+# Test setup
+app.dependency_overrides[get_db] = override_get_db
+app.dependency_overrides[get_current_user] = lambda: mock_user
+```
+
+### Adapter Pattern for SDK Isolation
+```python
+# SDK adapter layer wraps low-level API
+class XhsPcApiAdapter:
+    def __init__(self, cookies: str):
+        self.cookies = cookies
+        self.api = XHS_Apis()
+    
+    def search_note(self, keyword: str, page: int = 1):
+        success, msg, res = self.api.search_note(keyword, self.cookies, page)
+        # Normalize and return
+```
+
+### Repository Pattern for Data Access
+```python
+# Business logic shouldn't write raw SQL
+# Use SQLAlchemy ORM models
+draft = AiDraft(user_id=user_id, platform="xhs", title=title, body=body)
+db.add(draft)
+db.commit()
+db.refresh(draft)  # Get auto-generated fields
+```
+
+### Background Task Pattern
+```python
+def _execute_auto_task_background(db: Session, task: AutoTask) -> None:
     try:
-        # ... make request ...
-        res_json = response.json()
-        success, msg = res_json["success"], res_json["msg"]
-    except Exception as e:
-        success = False
-        msg = _log_api_error(e)
-    return success, msg, res_json
-```
-Callers always check `if not success: raise Exception(msg)` before accessing data.
-
-### Pagination Pattern (all list endpoints)
-All paginated list endpoints return a consistent shape via `paginated()` from `backend/app/schemas/common.py`:
-```python
-return paginated([{...} for item in items], page, page_size)
-# → {"total": N, "page": P, "page_size": S, "items": [...]}
+        # Long-running operation
+        adapter = XhsPcApiAdapter(cookies)
+        success, message, raw = adapter.search_note(keyword, page=1)
+        # Process results
+        db.commit()
+    except Exception as exc:
+        logger.warning(f"Auto task {task.id} failed: {exc}")
+    finally:
+        _calculate_next_run_at(task)
 ```
 
-### Multi-tenant Ownership Enforcement (all API routers)
-Every resource is scoped by `user_id`. Cross-user access returns 404 (not 403):
+## Code Formatting Conventions
+
+### Python
+- **Imports**: Standard library → Third-party → Local (separated by blank lines)
+- **Line length**: No explicit limit, prefer readability
+- **Indentation**: 4 spaces
+- **String quotes**: Prefer double quotes, use single for SQL
+- **Naming**: `snake_case` for functions/variables, `PascalCase` for classes
+- **Comments**: Use docstrings for public methods, inline comments sparingly
+- **Error handling**: Specific exceptions, log with context
+- **Type hints**: Required for function signatures in services
+
+### TypeScript
+- **Naming**: `PascalCase` for types/interfaces, `camelCase` for properties
+- **Exports**: Use named exports, avoid default exports
+- **Optional fields**: Use `field?: Type` syntax
+- **Union types**: Prefer string literal unions over enums
+- **Null handling**: Use `| null` explicitly when API can return null
+
+## Common Implementation Patterns
+
+### User Ownership Verification
 ```python
-item = db.get(Model, item_id)
-if not item or item.user_id != current_user.id:
+# Always verify resource belongs to current user
+draft = db.get(AiDraft, draft_id)
+if not draft or draft.user_id != current_user.id:
     raise HTTPException(status_code=404, detail="Not found")
 ```
-This pattern appears in every router for every resource type.
 
-### FastAPI Router Structure
+### Pagination Response
 ```python
-router = APIRouter(prefix="/resource", tags=["resource"])
-
-@router.get("/")
-def list_items(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    ...
-```
-- Always inject `current_user` via `Depends(get_current_user)` for auth
-- Always inject `db` via `Depends(get_db)` for database access
-- Use `Query(default, ge=..., le=...)` for validated query params
-
-### Dependency Injection for Adapters (testability)
-Adapters are injected via FastAPI `Depends` to enable test overrides:
-```python
-def get_pc_login_adapter() -> XhsPcLoginAdapter:
-    return XhsPcLoginAdapter()
-
-@router.post("/qrcode")
-def create_qrcode(adapter = Depends(get_pc_login_adapter), ...):
-    ...
-```
-Tests override with: `app.dependency_overrides[get_pc_login_adapter] = lambda: FakeAdapter()`
-
-### SQLAlchemy Query Style
-Use `select()` + `db.scalars()` (SQLAlchemy 2.0 style), not legacy `db.query()`:
-```python
-# Preferred
-items = db.scalars(
-    select(Model)
-    .where(Model.user_id == current_user.id)
-    .order_by(Model.created_at.desc())
-).all()
-
-# Also used in older code (acceptable)
-items = db.query(Model).filter(Model.user_id == user_id).all()
-```
-
-### Upsert Pattern
-For create-or-update operations, check existence first then branch:
-```python
-existing = db.scalars(select(Model).where(...)).first()
-if existing:
-    existing.field = new_value
-    existing.updated_at = now
-else:
-    db.add(Model(...))
-db.commit()
-```
-
-### Encrypted Storage
-All sensitive data (cookies, API keys) uses Fernet encryption:
-```python
-from backend.app.services.credential_service import decrypt_text, encrypt_text
-# or
-from backend.app.core.security import decrypt_text, encrypt_text
-
-encrypted = encrypt_text(raw_value)
-raw = decrypt_text(encrypted_value)
-```
-Never store cookies or API keys in plaintext.
-
-### Background Tasks with Threading
-Long-running operations triggered by webhooks use `threading.Thread`:
-```python
-import threading
-threading.Thread(
-    target=_dispatch_customer_message,
-    args=(user_id, account_id, app_cid, message),
-    daemon=True,
-).start()
-```
-
-### Settings Access
-Always use the cached singleton:
-```python
-from backend.app.core.config import get_settings
-settings = get_settings()  # @lru_cache — safe to call repeatedly
-```
-
-### Database Session in Background Jobs
-Background jobs (scheduler, threads) must manage their own sessions:
-```python
-from backend.app.core.database import SessionLocal
-
-db = SessionLocal()
-try:
-    # ... do work ...
-    db.commit()
-finally:
-    db.close()
-```
-
-### Nested Transaction for Concurrent Upserts
-Use `db.begin_nested()` + `db.rollback()` to handle race conditions:
-```python
-try:
-    db.begin_nested()
-    db.add(new_record)
-    db.flush()
-except Exception:
-    db.rollback()
-```
-
-### Timezone
-Always use Shanghai time for timestamps:
-```python
-from backend.app.core.time import shanghai_now
-now = shanghai_now()
-```
-
-### Logging
-Use `loguru` in SDK layer, standard `logging` in backend services:
-```python
-# apis/ layer
-from loguru import logger
-logger.exception(f'XHS PC API request failed: {error}')
-
-# backend/ layer
-import logging
-logger = logging.getLogger(__name__)
-logger.warning(f"Task {task.id} failed: {exc}")
-```
-
-### Error Handling in API Routes
-SDK/adapter failures that are user-facing should raise `HTTPException`:
-```python
-try:
-    result = adapter.do_something()
-except RuntimeError as exc:
-    raise HTTPException(status_code=502, detail=str(exc))
-```
-
-### SSE Streaming Responses
-```python
-from fastapi.responses import StreamingResponse
-
-async def generate():
-    for entry in history:
-        yield f"data: {json.dumps(entry, ensure_ascii=False)}\n\n"
-    while True:
-        try:
-            entry = await asyncio.wait_for(q.get(), timeout=25)
-            yield f"data: {json.dumps(entry, ensure_ascii=False)}\n\n"
-        except asyncio.TimeoutError:
-            yield "data: {\"ping\": true}\n\n"
-
-return StreamingResponse(
-    generate(),
-    media_type="text/event-stream",
-    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-)
-```
-SSE endpoints use `token` query param for auth (EventSource can't set headers):
-```python
-@router.get("/logs/stream")
-async def log_stream(token: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    payload = decode_token(token)
-    ...
-```
-
-### Delete Response Shape
-Successful deletes return `{"id": item_id, "status": "deleted"}`.
-
-### Serialization Helpers
-Complex models use dedicated `_serialize_*` functions rather than inline dicts:
-```python
-def _serialize_publish_job(job: PublishJob) -> dict[str, Any]:
+def paginated(items: list, page: int, page_size: int):
     return {
-        "id": job.id,
-        "status": job.status,
-        "published_at": job.published_at.isoformat() if job.published_at else None,
-        ...
+        "total": len(items),
+        "page": page,
+        "page_size": page_size,
+        "items": items[(page-1)*page_size : page*page_size]
     }
 ```
 
----
-
-## Testing Patterns
-
-### Test Database Override
-Every test that touches the DB uses `_override_database(tmp_path)` to inject an isolated SQLite DB:
+### Cookie String Normalization
 ```python
-def _override_database(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}", ...)
-    TestingSessionLocal = sessionmaker(...)
-    Base.metadata.create_all(bind=engine)
-
-    def override_get_db():
-        db = TestingSessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-    return get_db
+def _cookies_to_string(value: str) -> str:
+    """Convert JSON cookie dict to header string format."""
+    if value.startswith("{"):
+        cookies = json.loads(value)
+        return "; ".join(f"{k}={v}" for k, v in cookies.items())
+    return value
 ```
-Always clean up with `app.dependency_overrides.pop(key, None)` in `finally`.
 
-### Fake Adapter Classes
-Tests use Fake* classes that implement the same interface as real adapters:
+### Timestamp Handling
 ```python
-class FakePcLoginAdapter:
-    def create_qrcode(self):
-        return {"cookies": {...}, "qr_id": "qr-123", ...}
+# Use Shanghai timezone for all timestamps
+from backend.app.core.time import shanghai_now
 
-    def check_qrcode_status(self, qr_id, code, cookies):
-        return {"status": "confirmed", "cookies": {...}}
+now = shanghai_now()
+task.last_run_at = now
+task.next_run_at = _calculate_next_run_at(task)
 ```
 
-### Auth Helper
+### Fernet Encryption
 ```python
-def _register_and_get_access_token(username: str = "operator") -> str:
-    response = client.post("/api/auth/register", json={"username": username, "password": "secret123"})
-    return response.json()["access_token"]
+# Always encrypt sensitive data before storage
+from backend.app.core.security import encrypt_text, decrypt_text
+
+encrypted = encrypt_text(cookie_string)
+stored = AccountCookieVersion(encrypted_cookies=encrypted)
+
+# Decrypt when needed
+decrypted = decrypt_text(stored.encrypted_cookies)
 ```
 
-### Ownership Tests
-Every resource test verifies both owner access (200) and cross-user access (404):
+## API Usage Patterns
+
+### HTTP Client (Frontend)
+```typescript
+import { http } from '../lib/api'
+
+// Use axios wrapper with auth interceptor
+const res = await http.get('/api/notes', { params: { platform: 'xhs' } })
+
+// For SSE, use fetch with manual token
+const token = getAccessToken()
+const resp = await fetch(`/api/walle/logs/stream?token=${token}`)
+```
+
+### XHS SDK Methods
 ```python
-intruder_response = client.get(f"/api/resource/{id}", headers={"Authorization": f"Bearer {intruder_token}"})
-assert intruder_response.status_code == 404
+# Search notes with sorting
+success, msg, res = api.search_note(
+    query=keyword,
+    cookies_str=cookies,
+    page=1,
+    sort_type_choice=2,  # 0=综合 1=最新 2=点赞 3=评论 4=收藏
+    note_type=0,         # 0=不限 1=视频 2=图文
+)
 
-owner_response = client.get(f"/api/resource/{id}", headers={"Authorization": f"Bearer {owner_token}"})
-assert owner_response.status_code == 200
+# Get note details
+success, msg, res = api.get_note_info(note_url, cookies)
+
+# Get all comments recursively
+success, msg, comments = api.get_note_all_comment(note_url, cookies)
 ```
 
-### Frontend Source Assertions
-Some tests read frontend source files directly to assert UI invariants:
+### Task Recording
 ```python
-source = open("frontend/src/pages/platforms/xhs/accounts-page.tsx", encoding="utf-8").read()
-assert "antd" in source
-assert "检查" in source
+# Create task record for audit trail
+task = Task(
+    user_id=user_id,
+    platform="xhs",
+    task_type="ai_rewrite",
+    status="running",
+    progress=20,
+    payload={"draft_id": draft_id}
+)
+db.add(task)
+
+# Update on completion
+task.status = "completed"
+task.progress = 100
+task.finished_at = shanghai_now()
+db.commit()
 ```
 
----
+## Security Best Practices
 
-## TypeScript / Frontend Patterns
+1. **Input Validation**: Use Pydantic models for request validation
+2. **SQL Injection**: Use SQLAlchemy ORM, never raw string interpolation
+3. **XSS**: Frontend uses React's default escaping
+4. **Authentication**: JWT with 15-minute expiry, refresh token for re-auth
+5. **Cookie Security**: Encrypt with Fernet before storage
+6. **API Keys**: Encrypt in database, decrypt only when needed
+7. **Ownership Checks**: Verify `resource.user_id == current_user.id` for all mutations
+8. **Dependency Injection**: Use DI for testability and isolation
 
-### All Types in One File
-All TypeScript types are centralized in `frontend/src/types/index.ts`. No inline type definitions in component files.
+## Error Handling Patterns
 
-### Generic Paginated Type
+### Backend
+```python
+try:
+    result = external_api_call()
+    db.commit()
+    return {"success": True, "data": result}
+except Exception as e:
+    db.rollback()
+    logger.exception(f"Operation failed: {e}")
+    raise HTTPException(status_code=502, detail=str(e))
+```
+
+### Frontend
 ```typescript
-export type Paginated<T> = {
-  total: number;
-  page: number;
-  page_size: number;
-  items: T[];
-};
+try {
+    const res = await http.post('/api/endpoint', payload)
+    return res.data
+} catch (error) {
+    if (axios.isAxiosError(error)) {
+        message.error(error.response?.data?.detail || 'Request failed')
+    }
+    throw error
+}
 ```
 
-### Optional Fields with `?`
-API response types use `?` for fields that may be absent:
-```typescript
-export type PlatformAccount = {
-  id: number;
-  nickname: string;
-  avatar_url?: string;        // optional
-  status_message?: string;    // optional
-  profile?: Record<string, unknown>;
-};
+## Logging Standards
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Use appropriate log levels
+logger.debug("Detailed diagnostic information")
+logger.info("Normal operational message")
+logger.warning("Unexpected but handled situation")
+logger.error("Error that should be investigated")
+logger.exception("Exception with full traceback")  # Use instead of logger.error + print_exc
 ```
 
-### Union String Types for Status Fields
-Status fields use union types with a fallback `string`:
-```typescript
-status: "active" | "healthy" | "expired" | "risk" | "unknown" | string;
+## Database Session Management
+
+```python
+# In FastAPI routes
+@router.get("/items")
+def list_items(db: Session = Depends(get_db)):
+    # Session automatically closed
+
+# In background tasks / scheduler
+db = SessionLocal()
+try:
+    # Operations
+    db.commit()
+finally:
+    db.close()  # Always close
 ```
 
-### Payload vs Response Type Pairs
-Every resource has separate Payload (input) and Response (output) types:
-```typescript
-export type ModelConfigPayload = { name: string; model_type: ModelType; ... };
-export type ModelConfig = { id: number; name: string; has_api_key: boolean; ... };
+## Test Structure
+
+```
+tests/backend/
+├── test_api.py          # API endpoint tests
+├── test_platforms.py    # Platform-specific tests
+└── test_root_main.py    # Application startup tests
 ```
 
-### Intersection Types for Extensions
-Extended types use intersection (`&`) rather than re-declaring fields:
-```typescript
-export type KeywordGroupDetail = KeywordGroup & {
-  trend: { total_matches: number; ... };
-};
-```
-
-### Ant Design as Primary UI Library
-All UI components use Ant Design (antd). Tests assert `"antd" in source` for every page component.
-
-### API Client Pattern
-All HTTP calls go through `frontend/src/lib/api.ts` (Axios instance with JWT interceptor). Never call `fetch` directly.
-
----
-
-## Architecture Rules
-
-1. **Never call `apis/` directly from routers** — always go through `backend/app/adapters/xhs/`
-2. **All resources must be `user_id`-scoped** — no shared global state between users
-3. **Cookies and API keys must be Fernet-encrypted** before DB storage
-4. **Scheduler jobs must use `SessionLocal()` directly** — not FastAPI's `get_db()` dependency
-5. **SSE auth uses `token` query param** — not Authorization header (EventSource limitation)
-6. **Delete operations cascade** — child records (assets, comments, tags) must be cleaned up
-7. **Adapter factory pattern for testability** — inject adapters via `Depends()` so tests can override
-8. **`from __future__ import annotations`** at top of all backend Python files
-9. **`get_settings()` is `@lru_cache`** — safe to call anywhere, invalidate with `get_settings.cache_clear()`
-10. **Alembic for all schema changes** — never modify DB schema outside of migration files
+Key test patterns:
+- Use fixtures for database setup
+- Mock external dependencies with fake implementations
+- Test success, failure, and authorization cases
+- Verify database state changes
+- Clean up resources in finally blocks

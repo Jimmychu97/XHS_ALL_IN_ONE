@@ -1,162 +1,255 @@
-# XHS_ALL_IN_ONE — Technology Stack
-
-## Runtime Requirements
-- Python 3.10+
-- Node.js 20+
+# Technology Stack
 
 ## Backend Stack
 
 ### Core Framework
-- **FastAPI** 0.100+ — async REST API framework
-- **Uvicorn** — ASGI server
-- **SQLAlchemy** 2.0+ — ORM with declarative models
-- **Alembic** — database migrations
+- **Python**: 3.10+
+- **Web Framework**: FastAPI 0.100+
+- **ASGI Server**: Uvicorn
+- **Process Manager**: Built-in subprocess management in `main.py`
 
-### Authentication & Security
-- **python-jose[cryptography]** — JWT token encode/decode
-- **passlib[bcrypt]** — password hashing
-- **cryptography (Fernet)** — symmetric encryption for cookies and API keys
+### Database & ORM
+- **Primary Database**: SQLite (default, file: `data/spider_xhs.db`)
+- **Production Database**: MySQL (configurable via `DATABASE_TYPE=mysql`)
+- **ORM**: SQLAlchemy 2.0+
+- **Migrations**: Alembic
+- **Connection String**: 
+  - SQLite: `sqlite:///./data/spider_xhs.db`
+  - MySQL: Configurable via `DATABASE_URL` environment variable
 
-### Scheduling
-- **APScheduler** — background job scheduling for auto-tasks, publish jobs, and heartbeat checks
+### Security & Authentication
+- **Password Hashing**: passlib[bcrypt] - pbkdf2_sha256
+- **JWT Tokens**: python-jose[cryptography]
+  - Access Token: 15 minutes expiry
+  - Refresh Token: 7 days expiry, stored in localStorage
+- **Cookie Encryption**: cryptography (Fernet symmetric encryption)
+- **CORS**: FastAPI built-in CORS middleware
 
-### HTTP & Scraping
-- **requests** — synchronous HTTP for SDK calls
-- **aiohttp** — async HTTP
-- **PyExecJS** — executes reverse-engineered JS signing files from `static/`
-- **retry** — automatic retry decorator
+### Validation & Serialization
+- **Data Validation**: Pydantic 2.x
+- **Settings Management**: pydantic-settings
+- **Configuration Format**: YAML (pyyaml)
 
-### AI & Media
-- **Pillow** 9.2+ — image processing
-- **opencv-python** + **numpy** — advanced image operations
-- **qrcode** — QR code generation for login flows
+### Task Scheduling
+- **Scheduler**: APScheduler
+- **Job Store**: SQLAlchemy (persistent)
+- **Trigger Types**: 
+  - Interval trigger (hourly)
+  - Cron trigger (daily/weekly)
+- **Configuration**: `scheduler.enabled` in YAML config
 
-### Data & Config
-- **pydantic** + **pydantic-settings** — settings validation and env var parsing
-- **pyyaml** — YAML config file loading
-- **python-dotenv** — `.env` file support
-- **openpyxl** — Excel export
-- **loguru** — structured logging
+### HTTP Client
+- **Primary**: requests (synchronous)
+- **Async Support**: aiohttp
+- **Testing Client**: httpx
+
+### Media Processing
+- **Image Processing**: Pillow >= 9.2
+- **Computer Vision**: opencv-python, numpy
+- **QR Code**: qrcode
+
+### Logging & Monitoring
+- **Logging**: loguru
+- **Excel Export**: openpyxl
 
 ### Testing
-- **pytest** — test runner (126 tests passing)
-- **httpx** — async HTTP client for FastAPI TestClient
+- **Framework**: pytest
+- **Test Client**: httpx (for async API testing)
 
-### Optional / External
-- **playwright** — used by `ark_capture.py` for Ark seller backend login
-- **websockets** — used by `cookie_watcher.py` for CDP WebSocket connection
+### Reverse Engineering Tools
+- **JavaScript Execution**: PyExecJS
+- **Browser Automation**: 
+  - Playwright (for Ark platform)
+  - CDP (Chrome DevTools Protocol) for千帆客服工作台
 
 ## Frontend Stack
 
-### Core
-- **React 19** — UI framework
-- **TypeScript 5.9** — strict mode enabled (`"strict": true`)
-- **Vite 7** — build tool and dev server
-- **React Router DOM 7** — client-side routing
+### Core Framework
+- **Runtime**: Node.js 20+
+- **Framework**: React 19.2.3
+- **Language**: TypeScript 5.9.3
+- **Build Tool**: Vite 7.3.0
 
-### UI Components
-- **Ant Design (antd) 6** — primary component library
-- **@ant-design/icons 6** — icon set
-- **lucide-react** — additional icons
-- **recharts 3** — data visualization charts
+### UI Library
+- **Component Library**: Ant Design 6.3.7
+- **Icons**: @ant-design/icons 6.2.2
+- **Additional Icons**: lucide-react 0.562.0
 
-### State & Data
-- **axios 1.13** — HTTP client with JWT interceptor
-- **zod 4** — runtime schema validation
+### Routing & State
+- **Router**: react-router-dom 7.10.1
+- **Route Caching**: 
+  - keepalive-for-react 5.0.11
+  - keepalive-for-react-router 5.0.7
+
+### Data Visualization
+- **Charts**: recharts 3.6.0
 
 ### Drag & Drop
-- **@dnd-kit/core**, **@dnd-kit/sortable**, **@dnd-kit/utilities** — drag-and-drop for image reordering in draft workshop
+- **DnD Library**: @dnd-kit 
+  - core: 6.3.1
+  - sortable: 10.0.0
+  - utilities: 3.2.2
 
-### Performance
-- **keepalive-for-react** + **keepalive-for-react-router** — component keep-alive to preserve page state across navigation
+### HTTP & Validation
+- **HTTP Client**: axios 1.13.2
+- **Schema Validation**: zod 4.2.1
 
-### Build Config
-- Target: ES2020
-- Module resolution: Node
-- JSX: react-jsx (no React import needed)
-- Vite dev proxy: `/api` → `http://127.0.0.1:8000`
-- SSE proxy: disables buffering for `text/event-stream` responses
+### Development Tools
+- **Vite Plugin**: @vitejs/plugin-react 5.1.2
+- **Type Definitions**: 
+  - @types/react 19.2.14
+  - @types/react-dom 19.2.3
 
-## Database
+## SDK Layer Stack
 
-| Mode | Driver | Connection |
-|---|---|---|
-| SQLite (default) | Built-in | `./data/spider_xhs.db` |
-| MySQL (production) | `pymysql` | Configured via YAML or env vars |
+### JavaScript Dependencies (`package.json`)
+- **Encryption**: crypto-js 4.2.0
+- **DOM Environment**: jsdom 26.0.0
+
+### Signature Implementation
+- **Algorithm**: Custom reverse-engineered signature algorithms
+- **Execution**: PyExecJS runs JavaScript signature functions
+- **Key Files**:
+  - `xhs_a1.js` - A1 signature generation
+  - `xhs_creator_sign.js` - Creator platform signing
+  - `xhs_xray.js` - X-Ray anti-scraping bypass
 
 ## Development Commands
 
-### Install
+### Backend Development
 ```bash
+# Install dependencies
 pip install -r requirements.txt
-npm install                        # root (optional scripts)
-cd frontend && npm install && cd ..
-```
 
-### Start (Development)
-```bash
-# Backend + frontend together
-python main.py --with-frontend
-
-# Backend only
+# Start backend only
 python main.py
 
-# Backend with hot reload
+# Start backend with auto-reload
 python main.py --reload
 
-# Frontend only
-cd frontend && npm run dev
+# Start backend with frontend
+python main.py --with-frontend
+
+# Run tests
+pytest tests/backend/
+
+# Database migrations
+alembic revision --autogenerate -m "description"
+alembic upgrade head
 ```
 
-### Build (Production)
+### Frontend Development
 ```bash
-cd frontend && npm run build      # outputs to frontend/dist/
+# Install dependencies
+cd frontend && npm install
+
+# Start dev server
+npm run dev
+
+# Build for production
+npm run build
+
+# Preview production build
+npm run preview
 ```
+
+### SDK Debugging
+```bash
+# Playwright browser automation
+python ark_capture.py                # Interactive mode
+python ark_capture.py --daemon       # Background mode
+python ark_capture.py --sync-skus    # Batch SKU sync
+
+# Cookie watcher for 千帆客服
+python cookie_watcher.py             # Starts CDP listener
+```
+
+### Docker Deployment
+```bash
+# Build and start
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+```
+
+## Environment Variables
+
+### Required
+```bash
+SECRET_KEY=your-jwt-secret-key          # JWT signing
+```
+
+### Optional
+```bash
+DATABASE_TYPE=sqlite                     # or mysql
+DATABASE_URL=mysql://user:pass@host/db   # MySQL connection string
+CONFIG_FILE=/path/to/config.yaml         # Custom config file
+SCHEDULER_ENABLED=true                   # Enable background tasks
+SERVER_HOST=0.0.0.0                      # Backend bind host
+SERVER_PORT=8000                         # Backend port
+```
+
+## Configuration Files
+
+### Backend
+- `config/default.yaml` - Default settings
+- `config/production.yaml` - Production overrides
+- `requirements.txt` - Python dependencies
+- `backend/alembic.ini` - Alembic configuration
+
+### Frontend
+- `frontend/package.json` - Node dependencies & scripts
+- `frontend/tsconfig.json` - TypeScript configuration
+- `frontend/vite.config.ts` - Vite build configuration
+- `frontend/index.html` - HTML template
 
 ### Docker
-```bash
-docker compose up -d
-```
+- `Dockerfile` - Multi-stage build definition
+- `docker-compose.yml` - Service orchestration
+- `.dockerignore` - Exclude patterns
 
-### Database Migrations
-```bash
-# Apply all pending migrations
-alembic upgrade head
+## Build Outputs
 
-# Create new migration
-alembic revision --autogenerate -m "description"
-```
+### Backend
+- **Location**: N/A (interpreted language)
+- **Entry Point**: `backend.app.main:app`
+- **Port**: 8000 (configurable)
 
-### Tests
-```bash
-pytest tests/
-```
+### Frontend
+- **Build Command**: `npm run build`
+- **Output Directory**: `frontend/dist/`
+- **Assets**: Static HTML, JS, CSS bundles
+- **Port**: 5173 (dev), 80 (production via nginx)
 
-## Service Ports
-| Service | Default Port |
-|---|---|
-| FastAPI backend | 8000 |
-| Vite frontend dev server | 5173 |
-| API docs (Swagger) | http://localhost:8000/docs |
-| Qianfan workbench CDP | 9222 |
+## API Documentation
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+- **OpenAPI Spec**: Auto-generated by FastAPI
 
-## Environment Variables / Config Keys
+## Version Requirements Summary
 
-| Key | Default | Description |
-|---|---|---|
-| `SECRET_KEY` | `dev-only-change-me` | JWT signing secret |
-| `FERNET_KEY` | `""` (auto-generated) | Fernet encryption key for cookies |
-| `DATABASE_TYPE` | `sqlite` | `sqlite` or `mysql` |
-| `DATABASE_URL` | (built from components) | Full DB connection string override |
-| `SCHEDULER_ENABLED` | `false` | Enable APScheduler |
-| `CONFIG_FILE` | — | Path to override YAML config |
-| `WALLE_EVA_DIR` | `""` | Path to Qianfan workbench install dir |
+| Component | Minimum Version | Recommended |
+|-----------|----------------|-------------|
+| Python | 3.10 | 3.11+ |
+| Node.js | 20.x | 20.x LTS |
+| FastAPI | 0.100 | Latest |
+| SQLAlchemy | 2.0 | 2.0+ |
+| React | 19.x | 19.x |
+| TypeScript | 5.9 | 5.9+ |
+| Ant Design | 6.x | 6.x |
+| Vite | 7.x | 7.x |
 
-## Signing Architecture
+## Dependency Management
+- **Python**: pip with `requirements.txt`
+- **Node.js**: npm with `package-lock.json`
+- **Version Locking**: Dependencies are locked for reproducibility
 
-XHS API requests require dynamic signatures computed by reverse-engineered JavaScript:
-1. Python calls `PyExecJS` to execute JS files in `static/`
-2. JS computes `x-s`, `x-t`, `x-s-common` headers
-3. Headers injected into HTTP requests via `xhs_utils/`
-
-This is the core technical mechanism enabling all XHS API access.
+## Performance Considerations
+- **Database**: SQLite suitable for single-user, MySQL recommended for multi-user production
+- **Background Tasks**: APScheduler runs in separate thread, non-blocking
+- **Browser Automation**: Playwright headless mode for minimal resource usage
+- **Frontend**: Vite HMR for fast development, optimized production builds

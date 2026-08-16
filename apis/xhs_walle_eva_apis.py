@@ -33,10 +33,16 @@ def _load_edith_auth() -> str:
     if not EDITH_SAVE.exists():
         raise FileNotFoundError("edith_auth.json 不存在，请先运行 cookie_watcher.py 并触发一次会话请求")
     data = json.loads(EDITH_SAVE.read_text("utf-8"))
+    auth = data.get("authorization", "")
+    if not auth:
+        raise ValueError("edith_auth.json 中没有 authorization，请重新登录客服工作台并等待 cookie_watcher.py 捕获")
     age = time.time() - data.get("updated_at", 0)
     if age > _CACHE_MAX_AGE:
-        raise ValueError(f"edith token 已过期 ({int(age/3600)}h)，请确认 cookie_watcher.py 正在运行")
-    return data["authorization"]
+        logger.warning(
+            f"edith_auth.json 已 {age / 3600:.1f}h 未更新，继续使用已保存 token；"
+            "如果接口返回鉴权错误，请确认 cookie_watcher.py 正在运行"
+        )
+    return auth
 
 
 def _find_workbench_ws() -> str:
@@ -145,8 +151,12 @@ class WalleEvaAPI:
         )
 
     def get_buyer_packages(self, buyer_user_id: str):
-        """按买家 userId 查询订单包裹列表（eva.xiaohongshu.com/api/edith/customer/{userId}/packages/v2）"""
-        res_json = None
+        """按买家 userId 查询订单包裹列表 —— 优先用 edith 接口"""
+        ok, msg, res_json = _edith_call(f"/api/edith/customer/{buyer_user_id}/packages/v2", "GET")
+        if ok and res_json:
+            return ok, msg, res_json
+
+        # 方法2：直接 HTTP（备用）
         try:
             auth = _load_edith_auth()
             headers = {
@@ -158,13 +168,17 @@ class WalleEvaAPI:
             }
             url = f"https://eva.xiaohongshu.com/api/edith/customer/{buyer_user_id}/packages/v2"
             r = requests.get(url, headers=headers, timeout=15)
-            res_json = r.json()
+            raw = r.text
+            try:
+                res_json = r.json()
+            except Exception:
+                print(f"[BUYER-PACKAGES] HTTP non-JSON ({r.status_code}): {raw[:200]}")
+                return False, f"HTTP {r.status_code}: {raw[:100]}", None
             success = res_json.get("msg") == "ok" or bool(res_json.get("data"))
-            msg = res_json.get("msg", "")
+            return success, res_json.get("msg", ""), res_json
         except Exception as e:
-            logger.error(e)
-            success, msg = False, str(e)
-        return success, msg, res_json
+            logger.error(f"edith HTTP fallback failed: {e}")
+            return False, str(e), None
 
     def get_conv_list(self, cursor: int = -1, count: int = 25,
                       ctag: str = None, has_hide: bool = False):
@@ -319,7 +333,7 @@ async def _ark_direct_fetch(api_path: str, method: str = "GET", body: dict = Non
         "origin": "https://ark.xiaohongshu.com",
     }
     url = f"https://ark.xiaohongshu.com{api_path}"
-    r = requests.request(method, url, headers=headers, json=body, timeout=15)
+    r = requests.request(method, url, headers=headers, json=body, timeout=15, proxies={"http": "", "https": ""})
     return r.json()
 
 
@@ -432,6 +446,91 @@ class ArkAPI:
         """
         data_str = json.dumps({"publishType": publish_type, "sourceType": source_type, "itemId": item_id})
         return _ark_call("/api/edith/product/publish_render", "POST", {"data": data_str}, self._cookie_file)
+
+    # ── 订单管理 ──────────────────────────────────────────────
+    def get_orders(
+        self,
+        page_no: int = 1,
+        page_size: int = 20,
+        status: list[int] = None,
+        user_id: str = None,
+        start_time: int = None,
+        end_time: int = None,
+    ) -> tuple:
+        """
+        查询订单列表 POST /api/edith/fulfillment/order/page
+        status: [] 全部, [4,5]=待配货/待发货, [6]=已发货, [7]=已完成, [998]=已取消
+        user_id: 按买家 XHS userId 过滤
+        返回 data.packages[]
+        """
+        now_ms = int(time.time() * 1000)
+        # 默认查近 180 天
+        s = start_time or (now_ms - 180 * 86400 * 1000)
+        e = end_time or now_ms
+        body: dict = {
+            "page_no": page_no,
+            "page_size": page_size,
+            "status": status or [],
+            "order_tag_list": [],
+            "order_type_list": [],
+            "time_range_list": [{"time_type": 3, "start_time": s, "end_time": e}],
+            "seller_mark_priority_list": [],
+            "seller_mark_note_status_list": [],
+            "overdue_status": -2,
+            "sort_by": {"sort_field": "ordered_at", "desc": True},
+            "need_declare_info": True,
+            "need_declare_times": True,
+            "allow_es_fallback": True,
+        }
+        if user_id:
+            body["user_id"] = user_id
+        return _ark_call("/api/edith/fulfillment/order/page", "POST", body, self._cookie_file)
+
+    def get_orders_by_user(self, user_id: str) -> tuple:
+        """按买家 userId 查询其所有订单（最近 180 天）。
+        ⚠️ user_id 为空时直接报错：get_orders 里空 user_id 会不加过滤返回全店订单，导致错认买家。"""
+        if not user_id:
+            return False, "缺少买家 userId", None
+        return self.get_orders(page_size=50, user_id=user_id)
+
+    def ship_no_logistics(
+        self,
+        package_id: str,
+        express_no: str,
+        express_company_code: str = "selfdelivery",
+        plan_info_id: str = "",
+    ) -> tuple:
+        """
+        无物流发货 POST /api/edith/fulfillment/order_delivering_api
+        package_id: 包裹 ID（packageId 字段，如 P802410755675148741）
+        express_no: 发货内容/备注（填写给买家看的内容）
+        express_company_code: 固定 selfdelivery（无物流发货）
+        plan_info_id: 物流方案 ID（seller/info 的 logisticsPlans[].planId），
+                      不传时自动从 get_seller_info_v2 获取第一个 selfDelivering 方案
+
+        ✅ 接口路径已通过 ark_capture.py 真实抓包确认（2026-08-16）：
+        POST /api/edith/fulfillment/order_delivering_api
+        body: {delivery_package_id, package_id, delivery_group:false,
+               express_company_code:"selfdelivery", express_no, plan_info_id}
+        """
+        if not plan_info_id:
+            ok, msg, res = self.get_seller_info_v2()
+            if ok and res:
+                plans = ((res.get("data") or {}).get("logisticsPlans")) or []
+                for p in plans:
+                    if p.get("selfDelivering"):
+                        plan_info_id = p.get("planId", "")
+                        break
+        body = {
+            "delivery_package_id": package_id,
+            "package_id": package_id,
+            "delivery_group": False,
+            "express_company_code": express_company_code,
+            "express_no": express_no,
+        }
+        if plan_info_id:
+            body["plan_info_id"] = plan_info_id
+        return _ark_call("/api/edith/fulfillment/order_delivering_api", "POST", body, self._cookie_file)
 
     # ── 消息中心 ──────────────────────────────────────────────
     def get_unread_count(self) -> tuple:

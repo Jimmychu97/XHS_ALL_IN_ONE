@@ -3,7 +3,7 @@ import { App } from "antd";
 import { DeleteOutlined, ReloadOutlined, UserOutlined, WarningOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../../../../components/layout/app-shell";
-import { deleteAccount, fetchWalleAccounts, http } from "../../../../lib/api";
+import { deleteAccount, fetchWalleAccounts, http, saveWalleBackendToken } from "../../../../lib/api";
 import type { PlatformAccount } from "../../../../types";
 
 const { Text } = Typography;
@@ -31,6 +31,8 @@ export function WalleAccountsTab() {
       } else {
         setNoCredential(false);
       }
+      // 续期 backend_token.txt（refresh_token 7 天有效，防止 cookie_watcher 推送 401）
+      saveWalleBackendToken();
       // 再拉账号列表
       const res = await fetchWalleAccounts();
       setAccounts(res.items);

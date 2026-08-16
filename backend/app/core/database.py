@@ -15,6 +15,7 @@ settings = get_settings()
 _connect_args = {}
 if settings.database_url.startswith("sqlite"):
     _connect_args["check_same_thread"] = False
+    _connect_args["timeout"] = 10
     import os
     db_path = settings.database_url.replace("sqlite:///", "")
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
@@ -29,7 +30,8 @@ def _configure_sqlite_connection(dbapi_connection, connection_record) -> None:
         return
 
     cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=MEMORY")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
     cursor.close()
 
 
@@ -193,6 +195,10 @@ def _add_ark_sku_table(bind) -> None:
             "updated_at DATETIME, "
             "UNIQUE(product_id, sku_id))"
         ))
+        # 新列补加：srv（gsxunlocking 数字服务码），老库需要手动 ALTER
+        cols = [r[1] for r in conn.execute(text("PRAGMA table_info(ark_product_skus)")).fetchall()]
+        if "srv" not in cols:
+            conn.execute(text("ALTER TABLE ark_product_skus ADD COLUMN srv VARCHAR(64) DEFAULT ''"))
 
 
 def get_db():

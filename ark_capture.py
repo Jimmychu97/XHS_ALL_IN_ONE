@@ -205,7 +205,9 @@ async def _capture_mode():
         try:
             while True:
                 await asyncio.sleep(1)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            # asyncio.run 收到 Ctrl+C 时先取消主任务（CancelledError），
+            # 只 catch KeyboardInterrupt 会导致保存逻辑永远不执行
             print("\n[INFO] 退出，正在保存 cookies...")
             n = await _save_cookies(context)
             print(f"[INFO] {n} 条 cookie 已保存到 {COOKIE_FILE}")
@@ -392,7 +394,7 @@ async def _sync_skus_mode():
         try:
             while True:
                 await asyncio.sleep(1)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, asyncio.CancelledError):
             pass
         n = await _save_cookies(context)
         print(f"[INFO] {n} 条 cookie 已保存")
@@ -402,7 +404,21 @@ async def _sync_skus_mode():
     print("[INFO] 退出")
 
 
+def _fix_stdio_encoding():
+    """stdout/stderr 被重定向时 Python 默认用 GBK 编码，print 的 ➡/⬅ 箭头会抛
+    UnicodeEncodeError 导致请求/响应日志丢失。重定向时强制切 UTF-8；
+    控制台模式保持原样（控制台 API 可正常显示 unicode）。"""
+    try:
+        if not sys.stdout.isatty() and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if not sys.stderr.isatty() and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    _fix_stdio_encoding()
     parser = argparse.ArgumentParser()
     parser.add_argument("--daemon", action="store_true", help="常驻保活模式（headless，自动刷新 cookie）")
     parser.add_argument("--sync-skus", action="store_true", help="SKU 同步模式：批量抓取所有商品规格写入数据库")

@@ -1,214 +1,144 @@
-# Project Structure
+# XHS_ALL_IN_ONE — Project Structure
 
-## Root Directory Layout
+## Top-Level Layout
+
 ```
 XHS_ALL_IN_ONE/
-├── .amazonq/rules/          # Development rules & memory bank
-├── apis/                     # XHS底层SDK - Reverse-engineered API clients
-├── author/                   # Author assets (logos, donation QR codes)
-├── backend/                  # FastAPI backend application
-├── config/                   # YAML configuration files
-├── data/                     # Runtime data (Database, cookies, logs)
-├── frontend/                 # React frontend application
-├── spider/                   # Legacy spider module
-├── static/                   # Signature algorithm JS files
-├── tests/                    # Backend test suite
-├── xhs_utils/                # Utility functions for XHS SDK
-├── main.py                   # Unified entry point
-├── ark_capture.py            # Playwright-based Ark API capture tool
-├── cookie_watcher.py         # CDP credential persistence service
-├── docker-compose.yml        # Docker orchestration
-├── Dockerfile                # Multi-stage Docker build
-├── requirements.txt          # Python dependencies
-└── package.json              # Node.js dependencies for SDK
+├── main.py                  # Unified entry point: starts backend + frontend + cookie_watcher + ark_capture
+├── ark_capture.py           # Playwright capture tool for Ark (千帆卖家) — login & API interception
+├── cookie_watcher.py        # CDP credential keep-alive for Walle (千帆客服) — token refresh
+├── config/                  # YAML config (default.yaml / production.yaml)
+├── apis/                    # XHS bottom-layer SDK (reverse-engineered signing + HTTP)
+├── xhs_utils/               # Signing algorithm wrappers used by apis/
+├── static/                  # Core JS signing files (xhs_a1.js, xhs_creator_sign.js, etc.)
+├── backend/                 # FastAPI application
+├── frontend/                # React 19 + Vite SPA
+├── tests/                   # Backend pytest tests
+├── data/                    # Runtime data (auto-created): SQLite DB, cookies, logs, media
+└── spider/                  # Legacy spider module
 ```
 
-## Core Architectural Layers
-
-### Layer 1: SDK Layer (`apis/` + `xhs_utils/` + `static/`)
-**Purpose**: Low-level API clients with transparent signature implementation
-
-**Key Files**:
-- `xhs_pc_apis.py` - PC端接口 (search, note details, user profiles)
-- `xhs_creator_apis.py` - 创作者平台接口 (upload, publish)
-- `xhs_pc_login_apis.py` - PC端登录 (QR code, SMS)
-- `xhs_creator_login_apis.py` - 创作者登录
-- `xhs_pugongying_apis.py` - 蒲公英平台API
-- `xhs_qianfan_apis.py` - 千帆分销平台API
-- `xhs_walle_eva_apis.py` - 千帆客服 + 卖家后台 (WalleEvaAPI + ArkAPI)
-
-**Signature Files** (`static/`):
-- `xhs_a1.js`, `xhs_creator_sign.js` - Anti-scraping signature algorithms
-- `xhs_xray.js`, `xhs_rap.js` - Request signing
-
-**Utilities** (`xhs_utils/`):
-- `xhs_util.py` - Core signature generation
-- `http_util.py` - HTTP request wrapper
-- `cookie_util.py` - Cookie management
-- `data_util.py` - Data transformation utilities
-
-### Layer 2: Backend Application (`backend/app/`)
-**Purpose**: FastAPI-based REST API with business logic
-
-**Subdirectories**:
-- `core/` - Configuration, database, security, timezone handling
-- `models/` - SQLAlchemy ORM models (25+ tables)
-- `api/` - API route handlers
-- `services/` - Business logic layer + scheduler
-- `adapters/xhs/` - Adapter layer for XHS SDK (中转调用)
-- `schemas/` - Pydantic request/response schemas
-
-**Key Files**:
-- `main.py` - FastAPI app initialization
-- `core/database.py` - SQLAlchemy setup + session management
-- `core/security.py` - Fernet encryption, JWT tokens, password hashing
-- `core/time.py` - Shanghai timezone handling
-- `core/deps.py` - Dependency injection (current user, database session)
-
-### Layer 3: Frontend Application (`frontend/src/`)
-**Purpose**: React SPA with Ant Design 6
-
-**Subdirectories**:
-- `pages/platforms/xhs/` - Feature pages (账号矩阵, 笔记发现, 内容库, etc.)
-- `components/layout/` - Sidebar, notifications, app shell
-- `lib/api.ts` - Axios HTTP client with JWT interceptor
-- `types/` - TypeScript type definitions
-- `hooks/` - Custom React hooks
-
-**Key Pages**:
-- `accounts/` - Account management (账号矩阵)
-- `discover/` - Note discovery (笔记发现)
-- `library/` - Content library (内容库)
-- `drafts/` - Draft workshop (草稿工坊)
-- `publish/` - Publishing center (发布中心)
-- `auto/` - Automated operations (自动运营)
-- `walle/` - Customer service dashboard (千帆客服)
-- `insights/` - Data analytics (数据洞察)
-- `monitoring/` - Competitor monitoring (竞品监控)
-
-### Layer 4: Data Persistence (`data/`)
-**Purpose**: Runtime data storage
-
-**Contents**:
-- `spider_xhs.db` - SQLite database (default)
-- `ark_cookies.json` - Playwright cookies for Ark platform
-- `ark_profile/` - Playwright persistent browser profile
-- `logs/` - API request/response logs (JSONL format)
-- `cookies/` - Platform-specific cookie storage
-
-## Request Flow Architecture
+## Backend Structure (`backend/app/`)
 
 ```
-User Browser (React)
-    ↓ Axios HTTP
-FastAPI Backend (:8000)
-    ↓ Dependency Injection
-API Route Handler (backend/app/api/*.py)
-    ↓ Business Logic
-Service Layer (backend/app/services/*.py)
-    ↓ SDK Adapter
-XHS SDK Adapter (backend/app/adapters/xhs/)
-    ↓ Low-level API
-XHS SDK Layer (apis/*.py)
-    ↓ Signature + HTTP
-XHS Platform APIs
+backend/app/
+├── main.py              # FastAPI app factory (create_app), lifespan, CORS, router registration
+├── core/
+│   ├── config.py        # Settings via pydantic-settings, reads YAML + env vars
+│   ├── database.py      # SQLAlchemy engine, SessionLocal, init_db(), get_db()
+│   ├── deps.py          # FastAPI dependencies: get_current_user
+│   ├── security.py      # Fernet encrypt/decrypt, JWT create/decode, password hash/verify
+│   ├── time.py          # shanghai_now() — all timestamps use Shanghai timezone
+│   ├── platforms.py     # Platform registry helpers
+│   └── task_runner.py   # Background task execution wrapper
+├── models/              # SQLAlchemy ORM models (25+ tables)
+├── schemas/
+│   └── common.py        # paginated() helper → {total, page, page_size, items}
+├── api/
+│   ├── auth.py          # /api/auth — login, refresh token
+│   ├── accounts.py      # /api/accounts — platform account CRUD
+│   ├── notes.py         # /api/notes — content library
+│   ├── drafts.py        # /api/drafts — draft workshop
+│   ├── publish.py       # /api/publish — publish jobs
+│   ├── walle.py         # /api/walle — 千帆客服 REST + SSE log stream
+│   ├── ark.py           # /api/ark — 千帆卖家 product/SKU management
+│   ├── auto_tasks.py    # /api/auto-tasks — scheduled automation
+│   ├── ai.py            # /api/ai — text rewrite, image generation
+│   ├── model_configs.py # /api/model-configs — AI model configuration
+│   ├── notifications.py # /api/notifications — in-app alerts
+│   └── platforms/xhs/   # XHS-specific: pc.py, creator.py, crawl.py, analytics.py, monitoring.py
+├── services/
+│   ├── account_service.py       # upsert_platform_account_from_login, serialize_account, cookie helpers
+│   ├── ai_service.py            # OpenAICompatibleTextClient, OpenAICompatibleImageClient
+│   ├── scheduler_service.py     # APScheduler: due publish jobs + auto-task pipeline
+│   ├── heartbeat_scheduler.py   # 2-hour cookie health check scheduler
+│   ├── notification_service.py  # notify_* helpers for task/account/publish events
+│   ├── monitoring_crawl_service.py  # Competitor monitoring crawl logic
+│   ├── task_service.py          # Task audit log management
+│   ├── asset_downloader.py      # Media file download to local storage
+│   ├── credential_service.py    # Credential resolution for accounts
+│   ├── rate_limiter.py          # API rate limiting
+│   └── walle_agent/             # AI agent for Walle customer service
+└── adapters/xhs/                # XHS SDK adapter layer (wraps apis/ for backend use)
 ```
 
-## Database Architecture
-**Engine**: SQLite (default) / MySQL (production)  
-**ORM**: SQLAlchemy 2.0+  
-**Migrations**: Alembic
+## Frontend Structure (`frontend/src/`)
 
-**Key Table Groups**:
-1. **User & Auth**: `users`, `login_sessions`
-2. **Account Management**: `platform_accounts`, `account_cookie_versions`
-3. **Content Library**: `notes`, `note_assets`, `note_comments`, `tags`, `note_tags`
-4. **Drafts & AI**: `ai_drafts`, `draft_assets`, `ai_generated_assets`, `model_configs`
-5. **Publishing**: `publish_jobs`, `publish_assets`
-6. **Automation**: `auto_tasks`
-7. **Monitoring**: `monitoring_targets`, `monitoring_snapshots`
-8. **Walle (客服)**: `walle_conversations`, `walle_messages`, `walle_knowledge`, `walle_keywords`, `walle_orders`, `walle_shop_configs`, `walle_agent_sessions`
-9. **Ark (卖家)**: `ark_server_configs`, `ark_products`, `ark_product_skus`
-10. **System**: `tasks`, `notifications`, `api_logs`
-
-## Security Architecture
-- **Cookie Storage**: Fernet symmetric encryption
-- **API Keys**: Fernet encryption in database
-- **JWT Tokens**: 
-  - Access token: 15 minutes
-  - Refresh token: 7 days (stored in localStorage)
-- **Password Hashing**: pbkdf2_sha256
-
-## Background Services
-
-### 1. Cookie Watcher (`cookie_watcher.py`)
-- Connects to千帆客服工作台 via CDP (port 9222)
-- Monitors token refresh events in real-time
-- Saves credentials to `eva_cookies.json` + `edith_auth.json` every 30 seconds
-
-### 2. Ark Capture (`ark_capture.py`)
-- Playwright-based headless browser
-- Maintains persistent login state (`data/ark_profile/`)
-- Captures API requests/responses for debugging
-- Daemon mode: auto-refresh cookies every 30 minutes
-
-### 3. Scheduler (`backend/app/services/scheduler_service.py`)
-- APScheduler-based task scheduling
-- Handles automated operations, monitoring, cookie health checks
-- Configurable via `config/*.yaml`
-
-## Configuration Management
-**Layered Configuration** (priority low → high):
-1. `config/default.yaml` - Default settings
-2. `CONFIG_FILE` environment variable - Custom config file
-3. `.env` file - Environment variables
-4. Direct environment variables (highest priority)
-
-**Key Configuration Keys**:
-- `database.type` - "sqlite" or "mysql"
-- `security.secret_key` - JWT signing key
-- `scheduler.enabled` - Enable background tasks
-- `walle_eva_dir` - Path to千帆客服工作台 installation
-
-## Development Workflow
-
-### Startup Sequence
-```bash
-python main.py --with-frontend
-  ├─ start_frontend()       # Vite dev server :5173
-  ├─ start_cookie_watcher() # CDP credential watcher
-  ├─ start_ark_capture()    # Ark daemon (headless)
-  └─ uvicorn backend        # FastAPI :8000
+```
+frontend/src/
+├── main.tsx             # React entry point
+├── app/
+│   ├── router.tsx       # React Router v6 route definitions
+│   └── providers.tsx    # Context providers (auth, theme, etc.)
+├── lib/
+│   ├── api.ts           # axios instance (http) with JWT auto-header + getAccessToken()
+│   ├── platforms.ts     # Platform metadata helpers
+│   └── time.ts          # Time formatting utilities
+├── types/
+│   └── index.ts         # All TypeScript interfaces and types
+├── hooks/
+│   └── use-auth.ts      # Authentication hook
+├── components/
+│   ├── layout/          # Sidebar, notification bell, shell layout
+│   ├── account/         # Account binding components
+│   ├── platforms/       # Shared platform UI components
+│   └── ui/              # Generic UI primitives (Ant Design wrappers)
+└── pages/
+    ├── login/           # Login page
+    ├── platform-select/ # Platform selection
+    ├── platforms/xhs/   # All XHS feature pages:
+    │   ├── accounts/    # Account matrix
+    │   ├── notes/       # Note discovery
+    │   ├── library/     # Content library
+    │   ├── drafts/      # Draft workshop
+    │   ├── publish/     # Publish center
+    │   ├── auto-tasks/  # Auto operations
+    │   ├── analytics/   # Data insights
+    │   ├── monitoring/  # Competitor monitoring
+    │   ├── walle/       # 千帆客服 (walle-page.tsx, walle-logs.tsx, etc.)
+    │   └── ark/         # 千帆卖家
+    ├── models/          # AI model configuration
+    ├── settings/        # Platform settings
+    └── tasks/           # Task center
 ```
 
-### API Development
-1. Add model in `backend/app/models/`
-2. Create Alembic migration (or manual ALTER TABLE for SQLite)
-3. Add schema in `backend/app/schemas/`
-4. Implement service logic in `backend/app/services/`
-5. Create route in `backend/app/api/`
-6. Register router in `backend/app/main.py`
+## SDK Layer (`apis/`)
 
-### Frontend Development
-1. Define types in `frontend/src/types/`
-2. Create page component in `frontend/src/pages/platforms/xhs/`
-3. Add API client function in `frontend/src/lib/api.ts`
-4. Register route in app router
+```
+apis/
+├── xhs_pc_apis.py           # XHS PC: search, note detail, comments, user profile, feed
+├── xhs_pc_login_apis.py     # XHS PC: QR code + SMS login
+├── xhs_creator_apis.py      # Creator platform: upload, list works
+├── xhs_creator_login_apis.py # Creator: QR + SMS login
+├── xhs_pugongying_apis.py   # 蒲公英: KOL list, fan profile
+├── xhs_qianfan_apis.py      # 千帆分销: distributor/product info
+└── xhs_walle_eva_apis.py    # WalleEvaAPI + ArkAPI (CDP-based signing)
+```
 
-## Testing Strategy
-- **Test Framework**: pytest
-- **Test Location**: `tests/backend/`
-- **Coverage**: API endpoints, services, models
-- **Run Command**: `pytest tests/backend/`
+## Key Architectural Patterns
 
-## Deployment Options
-1. **Development**: `python main.py --with-frontend`
-2. **Docker**: `docker compose up -d`
-3. **Production**: Configure MySQL + nginx reverse proxy
+### Layered Architecture
+```
+Frontend (React) → HTTP → FastAPI Routes → Services → Adapters → SDK (apis/)
+                                        ↓
+                                   SQLAlchemy ORM → SQLite/MySQL
+```
 
-## File Naming Conventions
-- Backend: `snake_case.py` for files, `PascalCase` for classes, `snake_case` for functions
-- Frontend: `kebab-case.tsx` for files, `PascalCase` for components
-- Models: `{entity}.py` (e.g., `user.py`, `note.py`)
-- API routes: `{resource}.py` (e.g., `auth.py`, `accounts.py`)
-- Services: `{domain}_service.py` (e.g., `account_service.py`)
+### Signing Strategy
+- XHS PC/Creator: JS signing files in `static/` executed via Node.js subprocess through `xhs_utils/`
+- Ark/Walle: CDP (Chrome DevTools Protocol) — page's own JS signs requests, captured via Playwright
+
+### Multi-tenancy
+- All resources scoped by `user_id` (platform users, not XHS accounts)
+- XHS accounts stored in `platform_accounts` with `sub_type` distinguishing PC/Creator/Walle/Ark
+
+### Credential Security
+- All cookies and API keys encrypted with Fernet symmetric encryption
+- JWT: `access_token` (15 min, in-memory) + `refresh_token` (7 days, localStorage)
+- SSE endpoints use `?token=` query param (EventSource can't set headers)
+
+### Startup Sequence (`main.py`)
+1. `start_frontend()` — Vite dev server
+2. `start_cookie_watcher()` — CDP token keep-alive for Walle
+3. `start_ark_capture()` — Playwright daemon for Ark cookie refresh
+4. `uvicorn` — FastAPI backend on port 8000

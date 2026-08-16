@@ -6,7 +6,7 @@ import { fetchWalleAccounts, fetchWalleOrders } from "../../../../lib/api";
 import type { PlatformAccount, WalleOrder } from "../../../../types";
 
 const STATUS_MAP: Record<number, { label: string; color: string }> = {
-  0: { label: "待核销", color: "blue" },
+  0: { label: "待验机", color: "blue" },
   1: { label: "成功",   color: "green" },
   2: { label: "失败",   color: "red" },
   3: { label: "已过期", color: "default" },

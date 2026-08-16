@@ -60,6 +60,15 @@ conn.close()
 
 ## Token / Cookie 机制
 
+### Token / Cookie 机制
+
+#### ⚠️ backend_token.txt 过期问题（2026-08-16 已修复）
+- `F:\eva\backend_token.txt` 存的是平台 refresh_token（**7 天有效**），cookie_watcher 用它换 access_token 推送消息。
+- **过期症状**：cookie_watcher 日志 `刷新 access_token 失败: HTTP Error 401: Unauthorized` + `push_message 跳过: 无 access_token`。
+- **修复**：`POST /api/walle/accounts/save-token`（后端签发新 refresh_token 写文件）；
+  前端 walle 账号管理页 `load()` 已加 `saveWalleBackendToken()` 自动续期（页面每次加载刷新 token，防止 7 天后复发）。
+- **手动应急**：`python -c "import sys; sys.path.insert(0,r'F:\XHS_ALL_IN_ONE'); from backend.app.core.security import create_refresh_token; import pathlib; pathlib.Path(r'F:/eva/backend_token.txt').write_text(create_refresh_token(1), encoding='utf-8')"`
+
 ### 平台 JWT（用户登录 XHS_ALL_IN_ONE 平台）
 - 登录后返回 `access_token`（15分钟）+ `refresh_token`（7天）
 - `access_token` 存在前端内存变量 `accessToken`（`frontend/src/lib/api.ts`），**页面刷新后丢失**
@@ -245,6 +254,20 @@ GET  /ark/products/{product_id}/skus     # 商品 SKU 规格明细，优先读 a
 DELETE /ark/products/{product_id}        # 删除商品
 ```
 - `_upsert_skus(db, user_id, product_id, item_id, sku_list)` — 将 skuList 写入 ark_product_skus 表（upsert）
+
+### Ark 订单查询 / 无物流发货（2026-08-16 已抓包确认）
+```
+POST /api/edith/fulfillment/order/page             # 订单列表（ArkAPI.get_orders / get_orders_by_user）
+POST /api/edith/fulfillment/order_delivering_api   # 无物流发货（ArkAPI.ship_no_logistics）
+     body: {delivery_package_id, package_id, delivery_group:false,
+            express_company_code:"selfdelivery", express_no, plan_info_id?}
+POST /api/edith/fulfillment/pre_check_before_delivery  # 发货预检（浏览器会带 check_scene 参数）
+POST /api/edith/fulfillment/delivery/tab/route         # 发货方式 tab（body: {order_id}）
+POST /api/edith/package/logistics/companies            # 物流公司列表（body: {send_from:"001", package_id_list:[...], plan_info_id}）
+```
+- ⚠️ 原 `ship_no_logistics` 用的 `/fulfillment/delivery/no_logistics` 是**错误路径**（返回非 JSON），
+  真实提交接口是 `/fulfillment/order_delivering_api`（2026-08-16 真实抓包确认，code 0）
+- 订单状态枚举：`[4,5]=待配货/待发货 [6]=已发货 [7]=已完成 [998]=已取消`（Agent 工具 tools.py 同款映射）
 - `_sync_skus_with_playwright(db, user_id, products, errors, cookie_file="")` — 异步，Playwright headless 同步 SKU，**必须看下方说明**
 - `_parse_render_data(res)` — publish_render 响应的 data 字段是 JSON 字符串，统一解析为 dict
 - `_extract_render_extras(res)` — 一次性提取 _sku_list + _item_properties + _sale_properties
@@ -275,6 +298,99 @@ POST /walle/accounts/auto-import   # 静默自动导入：优先 CDP 9222，fall
 ```
 - `walle-accounts.tsx` 页面加载时自动调 `auto-import`，无需手动点「导入凭证」
 - 凭证缺失时显示黄色提示 + 「打开工作台」按钮（`window.open('https://walle.xiaohongshu.com')`）
+
+### ⚠️ Walle 已知坑与修复（2026-08-16）
+
+1. **Agent 400 崩溃（必现）**：`agent_loop.py _load_history` 原来只要求 tool 消息"前一条是 assistant"，
+   当 LLM 一次并行返回多个 tool_calls（如 search_knowledge + check_order_status）时，
+   第 2 个及以后的 tool 响应被误跳过 → 历史出现孤立 tool_calls →
+   DeepSeek 400 "An assistant message with 'tool_calls' must be followed by tool messages"。
+   **已修复**：用 `pending_call_ids` 窗口按 `tool_call_id` 匹配；tool 消息 content 保持字符串不做 JSON 解析。
+2. **买家 userId 提取错误**：appCid 尾部 20 字符是 **base64**（且是店铺 id 尾段），不是买家 id；
+   `walle_conversations.customer_id` 历史数据存的也是错的。
+   **已修复**：`_extract_buyer_id_from_app_cid` base64 解码 appCid 第一段（`$3$` 去掉后 split('.')[0]），
+   取 24 位十六进制 userId（如 `5f40d80e0000000001002f01`）。
+3. **订单检查链路统一走 ArkAPI**：`_check_order_status` / `_fetch_buyer_orders` 原走
+   edith `get_buyer_packages`（接口 404）+ CDP `get_conv_order`（不稳定），已全部改为
+   `ArkAPI().get_orders_by_user(buyer_user_id)`（与 Agent 工具 check_order_status 一致）。
+4. **`get_orders_by_user("")` 会查全店订单**（get_orders 里空 user_id 不加过滤）→ 错认买家。
+   **已修复**：空 userId 直接返回 `(False, "缺少买家 userId", None)`。
+5. **观察项**：walle_agent_sessions 历史里存在同一条 user 消息 3 次落库（重复 dispatch），
+   会浪费 token，暂不影响功能。
+6. **IMEI 支持空格**（2026-08-16）：`_extract_sn_imei` 的 IMEI 正则改为
+   `\d(?:\s?\d){14}`（15 位数字允许中间空格，如 `35 113831 0588051`），
+   `normalize_sn_imei` 先去空白再校验；SN 匹配改为 lookaround 支持中文上下文。
+7. **400 并发交错根因（2026-08-16 已修复）**：买家连发两条消息 → 两个 run_agent 并发，
+   落库交错成 `assistant(A)→assistant(B)→tool(B)→tool(A)`。`_load_history` 现改为
+   **按 tool_call_id 归属查找所属 assistant 并插入其后方**（兼容任意交错顺序）+ 兜底清洗
+   （无对应 tool 响应的 tool_calls 自动移除），彻底杜绝
+   "tool_calls must be followed by tool messages" 400。
+
+### GSX 验机查询（gsxunlocking，2026-08-16 接入）
+
+**接口**：`GET https://www.gsxunlocking.com/api/uapi`
+```
+参数: format=json, key=<API密钥>, srv=<数字服务码>, imei=<序列号/IMEI>
+响应: {"code":0,"flag":"ok","result":"序列号: xxx\n设备型号: ..."}   # code=0 成功（清理 HTML 标签后返回）
+      {"code":1,"flag":"fail","result":"Wrong IMEI or SN"}          # code!=0 失败（result 即错误信息）
+```
+
+**关键点（踩坑）**：
+- ⚠️ **srv 必须是数字服务码**（如 `1014`/`1032`）。`ark_product_skus.service_id` 默认值 = sku_id（24 位十六进制，
+  传过去 API 直接 HTTP 400），**需要在「商品管理 → 规格明细」把服务ID改成数字服务码**（服务ID 列可编辑）。
+- **srv 解析流程**（`tools._resolve_gsx_srv`）：
+  1) 显式 srv 参数优先
+  2) 买家最新订单规格 spec ↔ `ark_product_skus.query_type` 匹配 → 该 SKU 的 `service_id`
+  3) 按订单 SKU 的 sku_id 精确匹配兜底
+  4) 非数字服务码 → query_gsx 返回明确配置提示
+- **API 密钥**：`config.json`（项目根）→ `{"gsxunlocking": {"key": "..."}}`；
+  也可在 `walle_shop_configs.gsx_key` 配置（店铺级覆盖，优先级更高）。
+- **苹果序列号/IMEI 规则**（`tools.normalize_sn_imei`）：IMEI = 15 位纯数字；
+  序列号 = 8-14 位字母数字（大写、至少 1 个字母）。校验不通过不入库、不发请求。
+- **完整流程**（`walle._handle_sn_imei`）：订单状态检查 → 苹果规则校验 →
+  写入/补全 `walle_orders`（sn_imei，status=0）→ 按 spec↔query_type 取 service_id 调 gsxunlocking →
+  **成功 status=1 / 失败 status=2（结果存 verify_result）** →
+  **验机成功且订单待发货 → 自动无物流发货（`ship_no_logistics`，express_no=验机报告，买家可见）** →
+  **回复客户（含"订单已无物流发货"）→ 写入 `walle_agent_sessions`
+  （user"验机查询：SN" + assistant"验机结果..."），买家后续追问时 AI 能依据验机报告继续回答**。
+- **无物流发货接口**：`POST /api/edith/fulfillment/order_delivering_api`（`ship_no_logistics`），
+  express_no = 发货内容，仅对待发货订单执行；已发货/已完成自动跳过（日志 `[SHIP]`）。
+  ⚠️ **express_no 上限 200 字**（报错"填写的发货内容超过200字"）：完整验机报告放聊天消息，
+  发货内容取报告前 190 字 + "…"（2026-08-16 实测 945 字报告直接发会被拒）。
+- **订单卡话术分流**：待发货 → `_ORDER_GUIDE`（请提供序列号/IMEI）；已发货/已完成（status=other）→
+  "您的订单已发货～请问您想了解什么问题呢？"；取消/无订单 → 对应引导话术。
+- **首次互动先发找序列号引导**：普通消息首次进入 Agent 前（无 walle_agent_sessions 历史时），
+  先立即回复 `_SN_FIND_GUIDE`（各设备找序列号/IMEI 的方法），再做订单信息拉取 + Agent，避免客户干等；
+  已有历史的后续消息不再重复发送。
+- **仅待发货才调查询 API**：SN/IMEI（文字或图片识别）触达时，`_check_order_status` 返回
+  pending_ship → 调 GSX 查询；已发货/已完成（other）→ 回复"该订单已经查询过验机了，有什么问题可以解答"，
+  不重复调 API；取消/无订单 → 对应引导话术。
+- **业务术语：没有"核销"概念**（2026-08-16 统一）：本店无物流发货，验机成功 → 自动发货 → 订单完成。
+  所有客服话术 / Agent 系统提示词 / 工具描述 / 管理界面里的"核销"已改为"验机/发货/完成"，
+  避免客户误以为还有核销步骤。`walle_orders.status`：0-待验机 1-成功 2-失败 3-已过期。
+- **验机成功回复 = 3 条独立消息**：
+  1) 验机报告（AI 智能排版，独立一条，含发货成功提示）
+  2) 📌 报告分析（`_analyze_gsx_report_ai`：LLM 围绕 ①iCloud激活锁 ②网络锁 ③设备信息
+     ④激活日期是否对得上 ⑤黑名单 分析，给出优点 + 缺点/注意事项；失败回退规则式 `_analyze_gsx_report`）
+  3) 五星好评感谢"有什么问题随时找我"。
+  失败路径保持单条错误消息。Agent 上下文记录报告内容（供追问）。
+- **查询前即时反馈**：写入订单表后、调 GSX API 前，先发"正在查询序列号/IMEI：XXXXX，请稍等~"
+  （IMEI 用"正在查询IMEI"标签；15 位数字判 IMEI），避免买家等待无响应。
+- **报告换行（AI 智能排版）**：`_format_gsx_report_ai` 用 LLM（文本模型，temperature=0）把任意格式的
+  验机报告排版成"每字段一行"；**零丢失校验**（LLM 输出去空白必须与原文一致，不一致/失败自动回退
+  规则式 `_format_gsx_report`，保证任何情况下内容完整）。格式化后的报告用于回复、发货内容、verify_result。
+  - 规则式兜底：字段表（`_GSX_FIELD_NAMES`，含短报告"型号/IMEI/SN/激活锁/ID黑白状态" + 常见 GSX 字段）
+    精确切分 + 未知字段通用切分（非中文边界规则）。
+- **图片消息识别验机**（`_extract_sn_imei_from_image`）：买家发图片（`[图片] url`）→
+  调视觉模型提取 SN/IMEI →
+  识别到 → `_check_order_status` + `_handle_sn_imei`（写入 walle_orders.sn_imei → 验机 → 发货 → 3 条回复）；
+  未识别到 → 转 Agent 描述图片。此前图片消息 tools 被禁用，LLM 只会回复"请用文字描述"，现已不走该路径。
+  - ⚠️ **视觉模型类型是 `image` 不是 `vision`**（前端 ModelType = `"text" | "image"`），
+    `_auto_ai_suggest` / `_extract_sn_imei_from_image` 查 `model_type == "image"`。
+  - ⚠️ `normalize_sn_imei` 必须 `isascii()` 限定：Python 的 `isalnum()/isalpha()` 把中文也算字母数字，
+    OCR 返回"未识别到任何编码"会被误判成合法 SN（8-14 位）。
+- 旧 GKDT API（`api-srv.gkdt.com/inquiry/async`，appid+sign）已废弃移除；
+  `walle_shop_configs.gsx_appid/gsx_secret` 不再使用。
 
 ## main.py 启动顺序
 ```
@@ -360,6 +476,21 @@ _parse_render_data(res)      # publish_render 响应的 data 字段是 JSON 字�
 _extract_sku_list(res)       # 从 publish_render 响应中提取 skuList
 _extract_render_extras(res)  # 一次性提取 _sku_list + _item_properties + _sale_properties
 ```
+
+### ⚠️ 已知坑：ark_capture.py 的 Ctrl+C 保存与编码问题（已修复 2026-08-16）
+
+1. **Ctrl+C 保存失效**：`_capture_mode`/`_sync_skus_mode` 原来只 `except KeyboardInterrupt`，
+   但 `asyncio.run()` 收到 Ctrl+C 时先取消主任务（抛 `asyncio.CancelledError`），
+   导致"按 Ctrl+C 保存 cookies"永远不会执行。已改为 `except (KeyboardInterrupt, asyncio.CancelledError)`。
+2. **stdout 重定向时 GBK 编码崩溃**：`print("➡/⬅")` 的箭头字符在 stdout 重定向到文件时
+   触发 `UnicodeEncodeError`，请求/响应日志全部丢失（浏览器正常但日志为空）。
+   已新增 `_fix_stdio_encoding()`：非控制台时强制 UTF-8，控制台保持原样。
+3. **排查经验**：`data/ark_cookies.json` 的 `updated_at` 变化**不代表 Ctrl+C 保存成功**——
+   `_save_at_token_to_file` 在捕获到带 `authorization: AT-` 的请求时就会更新 `updated_at` 和 token。
+   确认保存成功要看 stdout 的 `[INFO] N 条 cookie 已保存` 或 playwright_cookies 数量变化。
+4. **登录态判断**：直连调用返回 `code 902 / -13004`（登录已过期）时是**会话真的过期**，
+   需要重新打开 ark_capture.py 在浏览器里登录；期间登录墙跳转（customer.xiaohongshu.com）抓到的是
+   瞬时/旧 token，不要误以为已刷新。
 
 ---
 

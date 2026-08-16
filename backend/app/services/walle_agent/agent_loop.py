@@ -44,7 +44,7 @@ def _load_history(db: Session, platform_account_id: int, app_cid: str) -> List[D
         )
         .order_by(WalleAgentSession.created_at.asc())
     ).all()
-    result = []
+    result: List[Dict[str, Any]] = []
     for r in rows:
         msg: Dict[str, Any] = {"role": r.role}
         content_str = r.content or ""
@@ -56,20 +56,51 @@ def _load_history(db: Session, platform_account_id: int, app_cid: str) -> List[D
             except Exception:
                 pass
         elif content_str:
-            try:
-                parsed = json.loads(content_str)
-                msg["content"] = parsed if isinstance(parsed, (list, dict)) else content_str
-            except Exception:
+            if r.role == "tool":
+                # tool 消息的 content 必须是字符串（OpenAI/DeepSeek 要求），不要做 JSON 解析
                 msg["content"] = content_str
+            else:
+                try:
+                    parsed = json.loads(content_str)
+                    msg["content"] = parsed if isinstance(parsed, (list, dict)) else content_str
+                except Exception:
+                    msg["content"] = content_str
         else:
             msg["content"] = ""
         if r.tool_call_id:
             msg["tool_call_id"] = r.tool_call_id
-        # tool 消息必须有对应的 assistant tool_calls，否则跳过
-        if r.role == "tool" and (not result or result[-1].get("role") != "assistant" or not result[-1].get("tool_calls")):
-            continue
-        result.append(msg)
-    return result
+
+        if r.role == "assistant":
+            result.append(msg)
+        elif r.role == "tool":
+            # 找到声明该 tool_call_id 的 assistant（从后往前找，兼容并发交错落库），
+            # 把 tool 响应插入到它后面，保证"assistant 的每个 tool_calls 都有对应 tool 响应"，
+            # 否则 LLM 400 ("tool_calls must be followed by tool messages")。
+            owner_pos = None
+            for i in range(len(result) - 1, -1, -1):
+                prev = result[i]
+                if prev.get("role") == "assistant" and prev.get("tool_calls"):
+                    if any(tc.get("id") == r.tool_call_id for tc in prev["tool_calls"]):
+                        owner_pos = i
+                        break
+            if owner_pos is None:
+                continue  # 孤儿 tool 消息（无对应 assistant tool_calls），跳过
+            insert_pos = owner_pos + 1
+            while insert_pos < len(result) and result[insert_pos].get("role") == "tool":
+                insert_pos += 1
+            result.insert(insert_pos, msg)
+
+    # ── 兜底清洗：若某 assistant 的 tool_calls 仍无对应 tool 响应（极端残留），
+    # 移除该 tool_call，避免历史残缺导致 LLM 400。
+    tool_ids = {m.get("tool_call_id") for m in result if m.get("role") == "tool"}
+    cleaned: List[Dict[str, Any]] = []
+    for m in result:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            m["tool_calls"] = [tc for tc in m["tool_calls"] if tc.get("id") in tool_ids]
+            if not m["tool_calls"]:
+                m.pop("tool_calls", None)
+        cleaned.append(m)
+    return cleaned
 
 
 def _save_message(db: Session, platform_account_id: int, app_cid: str,
@@ -159,9 +190,13 @@ _TOOL_GUIDE = """---
 1. 请用中文回复客户问题。
 2. 用户提任何问题时，必须第一个调用 search_knowledge 工具搜索知识库（query 填搜索关键词），根据知识库结果回答，知识库无结果时再用自身知识兜底。
 3. 知识库有相关信息时，必须优先依据知识库内容回答，不要自行编造。
-4. 当用户发送订单信息（包含订单号、商品名、商品ID等）时，回复结尾必须加上：案例在商品页面评论区，五年老店信誉保证。本店采用无物流发货，请提供您的手机序列号或IMEI以便完成验机核销。
-5. 如果是图片内容，优先抓取 IMEI、序列号等编码信息。识别到序列号/IMEI 后调用验机工具查询并反馈结果。如果核销完毕，则读取图片内容反馈。优先回答验机。
-6. 不要主动索要卡券号，验机只需要序列号或IMEI。
+4. 当买家发来任何消息时，必须先调用 check_order_status 工具查询其订单状态：
+   - 待发货（is_pending_ship=true）→ 回复请提供手机序列号或IMEI以便完成验机发货。
+   - 其他状态（已发货/已完成/已取消等）→ 告知当前订单状态，引导重新下单。
+   - 未找到订单 → 引导先下单再来找客服。
+5. 当用户发送订单信息（包含订单号、商品名、商品ID等）时，回复结尾必须加上：案例在商品页面评论区，五年老店信誉保证。本店采用无物流发货，请提供您的手机序列号或IMEI以便完成验机发货。
+6. 如果是图片内容，优先抓取 IMEI、序列号等编码信息。识别到序列号/IMEI 后调用验机工具查询并反馈结果。如果验机完毕，则读取图片内容反馈。优先回答验机。
+7. 不要主动索要卡券号，验机只需要序列号或IMEI。
 
 📦 可用工具：
 
@@ -169,12 +204,16 @@ _TOOL_GUIDE = """---
 - 用途：查话术、FAQ、售后政策等一切客服问题。
 - 【强制规则】用户发任何文字问题，必须第一个调用此工具，知识库无结果再用自身知识兜底。
 
-2️⃣ query_gsx（GSX 验机查询）
+2️⃣ check_order_status（查询订单状态）
+- 用途：买家发消息时必须先调用，确认订单是否待发货。
+- 待发货 → 请提供序列号/IMEI；其他状态 → 引导重新下单。
+
+3️⃣ query_gsx（GSX 验机查询）
 - 用途：用户提供序列号（字母数字组合）或 IMEI（15位数字）时查询验机报告。
 - IMEI 和序列号均可查询，不要告诉用户 IMEI 不能查询。
 
-3️⃣ record_order（核销登记）
-- 用途：用户提供序列号/IMEI 后，验机通过时登记核销订单。本店为无物流发货，核销即完成订单。
+4️⃣ record_order（订单登记）
+- 用途：用户提供序列号/IMEI 后，验机通过时登记订单。本店为无物流发货，发货即完成订单。
 """
 
 
@@ -274,12 +313,23 @@ def run_agent(
         messages.append({"role": "user", "content": user_content})
 
         # 5. dependencies
+        # 从会话表取买家 userId，供 check_order_status 工具使用。
+        # ⚠️ 优先从 appCid base64 解码（可靠）；walle_conversations.customer_id
+        # 历史数据存的是店铺 id 的 base64，不可靠。
+        from backend.app.models.walle import WalleConversation as _WC
+        from backend.app.api.walle import _extract_buyer_id_from_app_cid
+        conv_row = db.scalars(select(_WC).where(
+            _WC.platform_account_id == platform_account_id,
+            _WC.app_cid == app_cid,
+        )).first()
+        buyer_user_id = _extract_buyer_id_from_app_cid(app_cid) or ((conv_row.customer_id or "") if conv_row else "")
+
         dependencies: Dict[str, Any] = {
             "platform_account_id": platform_account_id,
             "app_cid": app_cid,
             "user_id": user_id,
-            "gsx_appid": shop_cfg.gsx_appid or "" if shop_cfg else "",
-            "gsx_secret": shop_cfg.gsx_secret or "" if shop_cfg else "",
+            "buyer_user_id": buyer_user_id,
+            # gsxunlocking API 密钥（留空时 query_gsx 自动读 config.json）
             "gsx_key": shop_cfg.gsx_key or "" if shop_cfg else "",
         }
 

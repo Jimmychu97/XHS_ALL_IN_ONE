@@ -972,8 +972,13 @@ export async function importWalleEvaAccount(evaPath?: string): Promise<PlatformA
     params: evaPath ? { eva_path: evaPath } : undefined,
   });
   // 将 access_token 写入后端，供 cookie_watcher.py 使用
-  await http.post("/walle/accounts/save-token").catch(() => {});
+  await saveWalleBackendToken();
   return response.data;
+}
+
+/** 刷新 backend_token.txt（后端签发 7 天 refresh_token，供 cookie_watcher.py 推送鉴权用） */
+export async function saveWalleBackendToken(): Promise<void> {
+  await http.post("/walle/accounts/save-token").catch(() => {});
 }
 
 export async function fetchWalleAccounts(): Promise<{ items: PlatformAccount[] }> {

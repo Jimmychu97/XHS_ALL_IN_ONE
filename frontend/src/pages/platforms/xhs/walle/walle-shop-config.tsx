@@ -6,7 +6,7 @@ import {
 } from "../../../../lib/api";
 import type { PlatformAccount } from "../../../../types";
 
-const DEFAULT_PERSONA = `你是一名专业的手机验机客服，负责帮助买家完成序列号核销和验机报告解读。
+const DEFAULT_PERSONA = `你是一名专业的手机验机客服，负责帮助买家完成验机并解读验机报告。
 请用简洁、友好的语言回复买家，遇到不确定的问题先查知识库再回答。`;
 
 export function WalleShopConfigTab() {

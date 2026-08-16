@@ -40,6 +40,7 @@ class ArkProductSku(Base):
     sku_name: Mapped[str] = mapped_column(String(512), default="")
     query_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)   # 查询类型（款式 variantValue）
     service_id: Mapped[str] = mapped_column(String(128), default="")         # 同 sku_id，业务语义字段
+    srv: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default="")  # gsxunlocking 数字服务码
     price: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)     # 分
     stock: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     delivery_time: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)

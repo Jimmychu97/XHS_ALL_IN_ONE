@@ -538,6 +538,7 @@ def get_product_skus(
                 "sku_name": s.sku_name,
                 "query_type": s.query_type,
                 "service_id": s.service_id,
+                "srv": s.srv or "",
                 "variants": [{"name": "款式", "value": s.query_type}] if s.query_type else [],
                 "price": s.price,
                 "stock": s.stock,
@@ -661,6 +662,7 @@ def debug_product_raw(
 class SkuPatchPayload(BaseModel):
     query_type: Optional[str] = None
     service_id: Optional[str] = None
+    srv: Optional[str] = None
 
 
 @router.patch("/products/{product_id}/skus/{sku_id}")
@@ -686,9 +688,11 @@ def patch_sku(
         sku.query_type = payload.query_type
     if payload.service_id is not None:
         sku.service_id = payload.service_id
+    if payload.srv is not None:
+        sku.srv = payload.srv
     sku.updated_at = shanghai_now()
     db.commit()
-    return {"sku_id": sku.sku_id, "query_type": sku.query_type, "service_id": sku.service_id}
+    return {"sku_id": sku.sku_id, "query_type": sku.query_type, "service_id": sku.service_id, "srv": sku.srv}
 
 
 @router.delete("/products/{product_id}")

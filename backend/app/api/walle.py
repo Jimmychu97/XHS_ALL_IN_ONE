@@ -256,17 +256,26 @@ def _send_via_cookie_watcher(app_cid: str, text: str, receiver_app_uid: str = ""
 
 import re as _re
 
-_SN_RE = _re.compile(r'\b([A-HJ-NP-Z0-9]{10}|[A-HJ-NP-Z0-9]{12})\b')
-_IMEI_RE = _re.compile(r'(?:IMEI[:\s]*)?\b(\d{15})\b', _re.IGNORECASE)
+_SN_RE = _re.compile(r'(?<![A-Z0-9])([A-HJ-NP-Z0-9]{10}|[A-HJ-NP-Z0-9]{12})(?![A-Z0-9])')
+_IMEI_RE = _re.compile(r'(?:IMEI[:\s]*)?(?<!\d)(\d(?:\s?\d){14})(?!\d)', _re.IGNORECASE)
 
 _ORDER_GUIDE = (
     "您好！感谢您的订单 🎉\n"
-    "本店采用无物流发货，请提供您的设备序列号或IMEI以便完成验机核销。\n\n"
+    "本店采用无物流发货，请提供您的设备序列号或IMEI以便完成验机。\n\n"
     "📱 iPhone / iPad：设置 → 通用 → 关于本机，或拨打 *#06# 获取IMEI\n"
     "💻 Mac / MacBook：苹果菜单 → 关于本机 → 序列号\n"
     "🎧 AirPods / 耳机：打开充电盒，盒内盖印有序列号；或在已配对iPhone的设置 → 蓝牙 → 设备名称旁边查看\n"
     "⌚ Apple Watch：设置 → 通用 → 关于本机；或表背面印有序列号\n\n"
-    "✅ 所有苹果设备序列号均可查询，发送序列号即可完成验机核销 😊"
+    "✅ 所有苹果设备序列号均可查询，发送序列号即可完成验机 😊"
+)
+
+_SN_FIND_GUIDE = (
+    "您好，我是店铺客服～请您先在设备上找到【序列号】或【IMEI】发给我，我马上帮您验机 😊\n\n"
+    "📱 iPhone/iPad：设置 → 通用 → 关于本机（或拨号 *#06# 直接显示IMEI）\n"
+    "💻 Mac：点左上角苹果  → 关于本机\n"
+    "⌚ Apple Watch：设置 → 通用 → 关于本机（或看表背）\n"
+    "🎧 AirPods：开盖看充电仓盖内侧，或连iPhone后 设置→蓝牙→设备名称\n\n"
+    "找到后直接发给我就可以啦～"
 )
 
 
@@ -284,14 +293,15 @@ def _luhn_check(n: str) -> bool:
 
 def _extract_sn_imei(text: str) -> tuple[str, str]:
     """返回 (sn, imei)，未找到则为空字符串"""
-    # IMEI 优先（显式前缀或 Luhn 校验通过）
+    # IMEI 优先：15 位数字，允许中间有空格（如 35 113831 0588051 → 351138310588051）
     for m in _IMEI_RE.finditer(text):
-        candidate = m.group(1)
+        candidate = m.group(1).replace(" ", "").replace("\u3000", "")
         prefix = m.group(0)
         if 'imei' in prefix.lower() or _luhn_check(candidate):
             return "", candidate
-    # SN：必须含至少一个字母
-    for m in _SN_RE.finditer(text.upper()):
+    # SN：必须含至少一个字母（先去空格）
+    text_nospace = _re.sub(r"\s+", "", text).upper()
+    for m in _SN_RE.finditer(text_nospace):
         candidate = m.group(1).replace('O', '0').replace('I', '1')
         if _re.search(r'[A-HJ-NP-Z]', candidate):
             return candidate, ""
@@ -317,65 +327,335 @@ def _clear_agent_session(platform_account_id: int, app_cid: str):
         db.close()
 
 
-def _fetch_buyer_orders(app_cid: str) -> str:
-    """从千帆工作台拉取该会话的订单信息，返回可读文本"""
+def _extract_buyer_id_from_app_cid(app_cid: str) -> str:
+    """从 appCid 提取买家真实 XHS userId（2026-08-16 修正）。
+
+    appCid 格式：$3$<b64段1>.<b64段2>
+    - 段1 base64 解码后为 '1#2#2#' + 买家 userId（24 位十六进制，如 5f40d80e0000000001002f01）
+    - 段2 是店铺信息（如 MjZkYTMwMDE1OTdmN2Ey = base64(店铺id尾段)），不是买家 id
+    ⚠️ 旧实现直接取 app_cid 尾部 20 字符是错的（那是 base64）。
+    """
+    import base64
+    import re as _re
+    if not app_cid:
+        return ""
+    seg = app_cid.split(".")[0]
+    if seg.startswith("$3$"):
+        seg = seg[3:]
+    if not seg:
+        return ""
     try:
-        from apis.xhs_walle_eva_apis import WalleEvaAPI
-        from backend.app.core.database import SessionLocal
-        # 先从数据库取买家 userId
-        db = SessionLocal()
-        try:
-            conv = db.scalars(
-                select(WalleConversation).where(WalleConversation.app_cid == app_cid)
-            ).first()
-            buyer_user_id = conv.customer_id if conv else None
-        finally:
-            db.close()
+        decoded = base64.b64decode(seg + "=" * (-len(seg) % 4)).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+    m = _re.search(r"[0-9a-f]{24}", decoded)
+    if m:
+        return m.group(0)
+    # fallback：去掉前导非十六进制字符（'#数字#数字#' 前缀）
+    return _re.sub(r"^[^0-9a-f]*", "", decoded)
 
+
+def _parse_order_list(res: dict) -> list:
+    """解析订单列表，兼容多种响应格式"""
+    packages = []
+    if not res:
+        return packages
+    data = res.get("data") or {}
+    for key in ("orderList", "orders", "resultList", "list"):
+        candidate = data.get(key) or res.get(key)
+        if isinstance(candidate, list):
+            packages = candidate
+            break
+    if not packages and isinstance(data, list):
+        packages = data
+    return packages
+
+
+def _conv_customer_id(platform_account_id: int, app_cid: str) -> str:
+    """取买家真实 XHS userId：优先从 appCid base64 解码（可靠）；
+    fallback 会话表 customer_id（历史 customer_id 存的是店铺 id 的 base64，不可靠）。"""
+    buyer = _extract_buyer_id_from_app_cid(app_cid)
+    if buyer:
+        return buyer
+    from backend.app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
+        conv = db.scalars(
+            select(WalleConversation).where(
+                WalleConversation.platform_account_id == platform_account_id,
+                WalleConversation.app_cid == app_cid,
+            )
+        ).first()
+        return (conv.customer_id or "") if conv else ""
+    finally:
+        db.close()
+
+
+def _fetch_buyer_orders(platform_account_id: int, app_cid: str) -> str:
+    """拉取该会话买家的订单信息，返回可读文本。
+    统一走 ArkAPI.get_orders_by_user（2026-08-16 已验证可用）；
+    原 edith get_buyer_packages 接口 404、CDP get_conv_order 不稳定，均已废弃。"""
+    try:
+        from apis.xhs_walle_eva_apis import ArkAPI
+        from backend.app.services.walle_agent.tools import _ORDER_STATUS
+
+        buyer_user_id = _conv_customer_id(platform_account_id, app_cid)
         if not buyer_user_id:
+            print(f"[ORDER-FETCH] 无 buyer_user_id, app_cid={app_cid[-20:]}")
             return ""
 
-        ok, _, res = WalleEvaAPI().get_buyer_packages(buyer_user_id)
+        ok, msg, res = ArkAPI().get_orders_by_user(buyer_user_id)
         if not ok or not res:
+            print(f"[ORDER-FETCH] 查询失败: {msg}")
             return ""
-        # packages/v2 返回 data.resultList
-        packages = (res.get("data") or {}).get("resultList") or []
+        packages = ((res.get("data") or {}).get("packages")) or []
         if not packages:
+            print(f"[ORDER-FETCH] 无订单数据, app_cid={app_cid[-20:]}")
             return ""
+
         lines = []
         for pkg in packages[:3]:
-            skus = pkg.get("skuSnapshots") or []
-            name = skus[0].get("name", "") if skus else ""
-            spec = skus[0].get("scskuCode", "") if skus else ""
-            order_sn = pkg.get("carriageInsurance", {}).get("orderId") or ""
-            status = pkg.get("erpStatusStr") or ""
-            amount = (pkg.get("packagePriceInfo") or {}).get("userActualPaidPrice", "")
+            sku = (pkg.get("skus") or [{}])[0]
+            scsku = (sku.get("scskus") or [{}])[0]
+            name = scsku.get("skuName") or scsku.get("name") or sku.get("skuName") or sku.get("name") or ""
+            spec = scsku.get("specification") or scsku.get("scskuCode") or ""
+            order_sn = pkg.get("orderId") or ""
+            status = _ORDER_STATUS.get(pkg.get("status", -1), "")
+            amount = pkg.get("actualPaid") or ""
             lines.append(f"商品：{name} 规格：{spec} 订单号：{order_sn} 状态：{status} 实付：{amount}元")
+        print(f"[ORDER-FETCH] 获取到 {len(lines)} 条订单")
         return "\n".join(lines)
     except Exception as e:
         print(f"[ORDER-FETCH] 失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return ""
+
+
+def _check_order_status(platform_account_id: int, app_cid: str) -> tuple:
+    """检查订单状态，返回 (状态码, 订单详情)。
+    统一走 ArkAPI.get_orders_by_user（2026-08-16 已验证可用）；
+    原 edith get_buyer_packages 接口 404、CDP get_conv_order 不稳定，均已废弃。"""
+    import datetime as _dt
+    def _log(msg):
+        print(msg)
+        try:
+            with open(r"F:\XHS_ALL_IN_ONE\data\logs\order_check.log", "a", encoding="utf-8") as lf:
+                lf.write(f"[{_dt.datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+        except: pass
+    try:
+        from apis.xhs_walle_eva_apis import ArkAPI
+        from backend.app.services.walle_agent.tools import _ORDER_STATUS, _PENDING_SHIP
+
+        buyer_user_id = _conv_customer_id(platform_account_id, app_cid)
+        if not buyer_user_id:
+            _log(f"[ORDER-CHECK] 无 buyer_user_id, app_cid={app_cid[-20:]}")
+            return "none", {}
+
+        ok, msg, res = ArkAPI().get_orders_by_user(buyer_user_id)
+        _log(f"[ORDER-CHECK] ArkAPI ok={ok} msg={msg}")
+        if not ok or not res:
+            _log(f"[ORDER-CHECK] 查询失败: {msg}")
+            return "error", {}
+
+        packages = ((res.get("data") or {}).get("packages")) or []
+        if not packages:
+            _log(f"[ORDER-CHECK] 无订单数据, app_cid={app_cid[-20:]}")
+            return "none", {}
+
+        latest = packages[0]
+        status_code = latest.get("status", -1)
+        status_text = _ORDER_STATUS.get(status_code, f"未知状态({status_code})")
+        _log(f"[ORDER-CHECK] 订单状态={status_text} (code={status_code})")
+
+        if status_code == 998:
+            return "cancelled", latest
+        elif status_code in _PENDING_SHIP:
+            return "pending_ship", latest
+        else:
+            return "other", latest
+    except Exception as e:
+        _log(f"[ORDER-CHECK] 异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return "error", {}
+
+
+def _save_pending_order(user_id: int, platform_account_id: int, app_cid: str, order_detail: dict):
+    """保存待发货订单到 walle_orders 表（order_detail 为 ArkAPI get_orders 返回的 package 结构）"""
+    from backend.app.core.database import SessionLocal
+    from backend.app.core.time import shanghai_now
+    db = SessionLocal()
+    try:
+        sku = (order_detail.get("skus") or [{}])[0]
+        scsku = (sku.get("scskus") or [{}])[0]
+        db.add(WalleOrder(
+            user_id=user_id, platform_account_id=platform_account_id,
+            app_cid=app_cid, sn_imei="", coupon_code="",
+            goods_name=scsku.get("skuName") or scsku.get("name") or sku.get("skuName") or sku.get("name") or "",
+            spec=scsku.get("specification") or scsku.get("scskuCode") or "",
+            order_sn=order_detail.get("orderId") or "",
+            status=0, created_at=shanghai_now(), updated_at=shanghai_now(),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _extract_sn_imei_from_image(user_id: int, img_url: str) -> str:
+    """用视觉模型识别图片中的序列号/IMEI，返回规范化编码（未识别到返回空串）"""
+    import base64
+    import requests as _req
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import ModelConfig
+    from backend.app.services.credential_service import decrypt_text
+    from backend.app.services.walle_agent.tools import normalize_sn_imei
+
+    db = SessionLocal()
+    try:
+        vision_mc = db.scalars(select(ModelConfig).where(
+            ModelConfig.user_id == user_id, ModelConfig.model_type == "image")).first()
+        if not vision_mc:
+            vision_mc = db.scalars(select(ModelConfig).where(ModelConfig.user_id == user_id)).first()
+        if not vision_mc:
+            print("[IMG-OCR] 未配置视觉模型")
+            return ""
+        api_key = decrypt_text(vision_mc.encrypted_api_key) if vision_mc.encrypted_api_key else ""
+        base_url, model_name = vision_mc.base_url or "", vision_mc.model_name or ""
+    finally:
+        db.close()
+
+    if not (base_url and model_name and api_key):
+        print("[IMG-OCR] 视觉模型配置不完整")
+        return ""
+
+    try:
+        img_resp = _req.get(img_url, headers={
+            "Referer": "https://walle.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"}, timeout=10)
+        img_resp.raise_for_status()
+        mime = img_resp.headers.get("content-type", "image/jpeg").split(";")[0]
+        data_uri = f"data:{mime};base64,{base64.b64encode(img_resp.content).decode()}"
+
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": "你是序列号识别助手。识别图片中的苹果设备序列号（SN，字母数字组合）或 IMEI（15位数字）。只输出识别到的编码本身，不要解释、不要多余内容；没识别到输出 NONE。"},
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                    {"type": "text", "text": "请提取图中的序列号或IMEI。"},
+                ]},
+            ],
+            "temperature": 0,
+        }
+        resp = _req.post(f"{base_url.rstrip('/')}/chat/completions",
+                         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                         json=payload, timeout=30)
+        resp.raise_for_status()
+        text = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+        code = normalize_sn_imei(text)
+        if code:
+            return code
+        sn, imei = _extract_sn_imei(text)  # 兜底正则提取
+        return sn or imei or ""
+    except Exception as e:
+        print(f"[IMG-OCR] 识别失败: {e}")
         return ""
 
 
 def _dispatch_customer_message(user_id: int, platform_account_id: int, app_cid: str, user_message: str):
-    """前置拦截：订单卡片/商品卡 → 清历史+引导序列号；含序列号/IMEI → 直接验机；其余 → 拉订单+Agent"""
+    """前置拦截：订单卡 -> 检查订单状态；含序列号/IMEI -> 检查订单后验机；其余 -> Agent"""
     stripped = user_message.strip()
 
-    # 1. 订单卡/商品卡 → 清空 Agent 历史，发引导语
-    if stripped in ("[订单]", "[商品信息]", "[商品]"):
-        _clear_agent_session(platform_account_id, app_cid)
-        _fire_and_forget_reply(user_id, platform_account_id, app_cid, _ORDER_GUIDE)
+    # 0. 图片消息 -> 视觉识别序列号/IMEI，识别到则写入订单并走验机流程
+    if stripped.startswith("[图片]"):
+        img_url = stripped.replace("[图片]", "", 1).strip()
+        code = _extract_sn_imei_from_image(user_id, img_url)
+        if code:
+            status, _ = _check_order_status(platform_account_id, app_cid)
+            if status == "cancelled":
+                _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                                       "您好，该订单已取消。请先下单才能查询苹果GSX报告 😊")
+            elif status == "pending_ship":
+                print(f"[IMG-SN] 图片识别到 {code}，进入验机流程")
+                _handle_sn_imei(user_id, platform_account_id, app_cid, code)
+            elif status == "other":
+                # 已发货/已完成等状态：不重复查询，提示已查询过
+                _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                                       "您好，该订单已经查询过验机了～请问您还有什么问题需要了解吗？我可以帮您解答 😊")
+            elif status == "none":
+                _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                                       "您好，未检测到有效订单。请先下单才能查询苹果GSX报告 😊")
+            else:
+                print(f"[DISPATCH] 订单查询失败 status={status}，跳过验机")
+        else:
+            print("[IMG-SN] 图片未识别到序列号/IMEI，转 Agent 处理")
+            _auto_ai_suggest(user_id, platform_account_id, app_cid, stripped)
         return
 
-    # 2. 含序列号 / IMEI → 直接验机
+    # 1. 订单卡 -> 检查订单状态
+    if stripped in ("[订单]", "[商品信息]", "[商品]"):
+        _clear_agent_session(platform_account_id, app_cid)
+        status, order_detail = _check_order_status(platform_account_id, app_cid)
+        if status == "cancelled":
+            _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                                   "您好，该订单已取消。请先下单才能查询苹果GSX报告 😊")
+        elif status == "pending_ship":
+            _save_pending_order(user_id, platform_account_id, app_cid, order_detail)
+            _fire_and_forget_reply(user_id, platform_account_id, app_cid, _ORDER_GUIDE)
+        elif status == "none":
+            _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                                   "您好，请先下单才能查询苹果GSX报告 😊")
+        elif status == "other":
+            # 已发货/已完成等状态：让买家说明想了解的问题
+            _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                                   "您好，您的订单已发货～请问您想了解什么问题呢？我可以帮您查询验机信息、售后服务等相关问题哦 😊")
+        else:
+            print(f"[DISPATCH] 订单查询失败 status={status}，跳过自动回复")
+        return
+
+    # 2. 含序列号 / IMEI -> 检查订单状态后验机
     sn, imei = _extract_sn_imei(user_message)
     code = sn or imei
     if code:
-        _handle_sn_imei(user_id, platform_account_id, app_cid, code)
-        return
+        status, _ = _check_order_status(platform_account_id, app_cid)
+        if status == "cancelled":
+            _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                                   "您好，该订单已取消。请先下单才能查询苹果GSX报告 😊")
+            return
+        elif status == "pending_ship":
+            # 仅待发货才调用查询 API
+            _handle_sn_imei(user_id, platform_account_id, app_cid, code)
+            return
+        elif status == "other":
+            # 已发货/已完成等状态：不重复查询，提示已查询过
+            _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                                   "您好，该订单已经查询过验机了～请问您还有什么问题需要了解吗？我可以帮您解答 😊")
+            return
+        elif status == "none":
+            _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                                   "您好，未检测到有效订单。请先下单才能查询苹果GSX报告 😊")
+            return
+        else:
+            print(f"[DISPATCH] 订单查询失败 status={status}，跳过验机")
+            return
 
-    # 3. 普通消息 → 先拁取订单信息注入上下文，再走 Agent
-    order_info = _fetch_buyer_orders(app_cid)
+    # 3. 普通消息 -> Agent
+    # 会话首次互动：先立即回复"如何找序列号"，不让客户干等 Agent 处理
+    from backend.app.core.database import SessionLocal as _SDL
+    from backend.app.models.walle import WalleAgentSession as _WAS
+    _db0 = _SDL()
+    try:
+        _first_touch = _db0.scalars(
+            select(_WAS).where(
+                _WAS.platform_account_id == platform_account_id,
+                _WAS.app_cid == app_cid,
+            ).limit(1)
+        ).first() is None
+    finally:
+        _db0.close()
+    if _first_touch:
+        _fire_and_forget_reply(user_id, platform_account_id, app_cid, _SN_FIND_GUIDE)
+    order_info = _fetch_buyer_orders(platform_account_id, app_cid)
     if order_info:
         enriched = f"{user_message}\n\n[当前订单信息]\n{order_info}"
     else:
@@ -424,8 +704,265 @@ def _fire_and_forget_reply(user_id: int, platform_account_id: int, app_cid: str,
     _append_log(user_id, level, f"📤 发送{'OK' if ok else '失败: ' + err}: {text[:40]}", {"app_cid": app_cid})
 
 
+# GSX 报告字段名（用于按字段换行；字段表驱动，避免把值里的冒号/URL 误切）
+_GSX_FIELD_NAMES = (
+    "型号信息", "型号名称", "IMEI2", "IMEI", "序列号", "设备容量", "设备颜色", "机型", "类型",
+    "网络制式", "激活状态", "激活日期", "预计购买时间", "有效购买日期", "保修状态", "电话支持",
+    "保修截止日期", "剩余保修天数", "是否预激活", "是否延保", "延保条件", "已注册设备",
+    "是否官换机", "是否官翻机", "是否演示机", "是否资源机", "是否权益机", "是否过时产品",
+    "已更换产品的序列号", "借出设备", "产品类型", "维修状态", "iCloud激活锁", "iCloud状态",
+    "网络锁", "运营商", "下次激活策略ID", "美国运营商状态", "GSMA状态", "型号号码", "销售地区",
+    "SIM卡", "主板代号", "芯片名称", "芯片型号", "运行内存", "处理器", "电池信息", "屏幕信息",
+    "上市时间", "其他信息", "设备图片", "错误信息",
+    # 基础查询短报告字段
+    "型号", "IMEI/SN", "激活锁", "ID黑白状态",
+    # 常见 GSX 字段（减少中文值场景的歧义）
+    "生产日期", "出厂状态", "购买日期", "销售日期", "首次激活日期", "激活策略",
+    "维修记录", "换机记录", "翻新状态", "监管状态", "苹果官方记录", "内部代码",
+    "备注信息", "特殊状态", "专属标记", "销售记录", "采购记录", "历史记录",
+)
+
+
+def _format_gsx_report(result: str) -> str:
+    """把 GSX 报告（一行 字段:值 拼接）按字段换行，提升可读性。
+
+    两遍切分，且保证不丢失任何内容：
+    1) 已知字段表精确切分（字段名内部子串如"已更换产品的序列号"不会误切，
+       URL / "Processor Speed:" 等值内冒号也不会误切）
+    2) 未知字段通用兜底：仅当字段名前是"非中文"字符（数字/ASCII/标点等值边界）才切，
+       避免把中文值（如"是"）误并进下一个字段名；中文值粘连时保持原样不切错。
+
+    无论怎么切，输出去掉空白后与原文完全一致（内容零丢失）。
+    """
+    import re as _re
+    text = (result or "").strip()
+    if not text:
+        return text
+
+    # ── 第一遍：已知字段精确切分 ──
+    names = sorted(_GSX_FIELD_NAMES, key=len, reverse=True)
+    pat = _re.compile("(?:" + "|".join(_re.escape(n) for n in names) + ")[:：]")
+    positions = []
+    i = 0
+    while i < len(text):
+        m = pat.match(text, i)
+        if m:
+            positions.append(m.start())
+            i = m.end()  # 跳过整个字段名+冒号，防止字段名内的子串再次匹配
+        else:
+            i += 1
+    lines = []
+    last = 0
+    for pos in positions:
+        if pos > last:
+            lines.append(text[last:pos].strip())
+            last = pos
+    lines.append(text[last:].strip())
+
+    # ── 第二遍：未知字段通用兜底（安全规则：字段名前必须是非中文边界）──
+    # 已知字段开头的行已被第一遍精确切分，值保持完整，不再二次切分
+    known_prefix = _re.compile("^(?:" + "|".join(_re.escape(n) for n in names) + ")[:：]")
+    url_holder: dict[str, str] = {}
+
+    def _keep_url(m: "re.Match") -> str:
+        k = f"__U{len(url_holder)}__"
+        url_holder[k] = m.group(0)
+        return k
+
+    generic = _re.compile(r"(?<=[^一-鿿])([\u4e00-\u9fa5]{2,10}[:：])")
+    out: list[str] = []
+    for line in lines:
+        if ":" not in line:
+            out.append(line)
+            continue
+        protected = _re.sub(r"https?://\S+", _keep_url, line)
+        # 行首已知字段已精确切分：从它的值部分开始通用切分，避免对已知字段名二次切分
+        skip = 0
+        m = known_prefix.match(protected)
+        if m:
+            skip = m.end()
+        positions = []
+        i = skip
+        while i < len(protected):
+            m = generic.match(protected, i)
+            if m:
+                positions.append(m.start())
+                i = m.end()
+            else:
+                i += 1
+        segs = []
+        last = 0
+        for pos in positions:
+            if pos > last:
+                segs.append(protected[last:pos].strip())
+                last = pos
+        segs.append(protected[last:].strip())
+        for k, v in url_holder.items():
+            segs = [s.replace(k, v) for s in segs]
+        out.extend(s for s in segs if s)
+    return "\n".join(out)
+
+
+def _load_text_model_config(user_id: int) -> tuple:
+    """加载用户文本模型配置，返回 (base_url, model_name, api_key)；未配置返回三个空串"""
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import ModelConfig
+    from backend.app.services.credential_service import decrypt_text
+    db = SessionLocal()
+    try:
+        mc = db.scalars(select(ModelConfig).where(
+            ModelConfig.user_id == user_id, ModelConfig.model_type == "text")).first()
+        if not mc:
+            mc = db.scalars(select(ModelConfig).where(ModelConfig.user_id == user_id)).first()
+        if not mc:
+            return "", "", ""
+        api_key = decrypt_text(mc.encrypted_api_key) if mc.encrypted_api_key else ""
+        return (mc.base_url or ""), (mc.model_name or ""), api_key
+    finally:
+        db.close()
+
+
+def _format_gsx_report_ai(result: str, user_id: int) -> str:
+    """用 LLM 智能排版验机报告（适配任意服务/格式的报告）。
+
+    - LLM 只做排版（每字段一行），严格指令禁止增删改内容
+    - 零丢失校验：LLM 输出去空白后必须与原文一致，否则回退规则式 `_format_gsx_report`
+    - LLM 调用失败/未配置模型时同样回退规则式（保证任何情况下内容完整）
+    """
+    import re as _re
+    import requests as _req
+    base_url, model_name, api_key = _load_text_model_config(user_id)
+    if not (base_url and model_name and api_key):
+        return _format_gsx_report(result)
+
+    prompt = (
+        "你是报告排版助手。把下面的苹果验机报告重新排版成易读格式：每个字段占一行（字段名: 值），"
+        "字段之间不要空行，不要加编号。"
+        "【严格规则】逐字保留所有字段名和值：不要增删改任何内容、不要补充解释、不要截断、不要丢行、"
+        "不要改变字段顺序。只允许插入换行和空格。\n\n报告原文：\n" + result
+    )
+    try:
+        resp = _req.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": "你只负责排版，绝不改动报告内容。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        out = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+        # 零丢失校验：去空白后必须与原文完全一致，否则回退规则式
+        if out and _re.sub(r"\s+", "", out) == _re.sub(r"\s+", "", result):
+            return out
+        print("[FMT-AI] LLM 输出与原文不一致，回退规则式")
+    except Exception as e:
+        print(f"[FMT-AI] LLM 排版失败: {e}")
+    return _format_gsx_report(result)
+
+
+def _analyze_gsx_report_ai(report: str, user_id: int) -> str:
+    """用 LLM 分析验机报告，输出【报告分析】。
+
+    围绕 5 点分析：① iCloud激活锁 ② 网络锁 ③ 设备信息 ④ 激活日期是否对得上 ⑤ 黑名单，
+    给出几条优点 + 几条缺点/注意事项。LLM 失败/未配置时回退规则式 `_analyze_gsx_report`。"""
+    import requests as _req
+    base_url, model_name, api_key = _load_text_model_config(user_id)
+    if not (base_url and model_name and api_key):
+        return _analyze_gsx_report(report)
+
+    prompt = (
+        "你是专业的苹果设备验机分析师。请根据下面的验机报告输出【报告分析】，"
+        "围绕以下 5 点逐条分析：\n"
+        "1. iCloud激活锁：是否开启/有ID，对购买和使用的影响\n"
+        "2. 网络锁：是否有锁/运营商锁，能否正常插卡使用\n"
+        "3. 设备信息：型号、容量、颜色，是否官换机/官翻机/资源机等\n"
+        "4. 激活日期：是否与设备上市时间/购买时间对得上\n"
+        "5. 黑名单：ID黑白状态，是否存在风险\n\n"
+        "要求：\n"
+        "- 先给出 2-3 条【优点】\n"
+        "- 再给出 1-2 条【缺点/注意事项】（确实没问题就说明整体成色良好）\n"
+        "- 简明扼要，总共 6-10 行，像资深验机师傅的口吻，别重复报告原文\n"
+        "- 只能依据报告内容，报告里没有的信息不要猜测\n\n"
+        "验机报告：\n" + report
+    )
+    try:
+        resp = _req.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": "你是苹果设备验机分析师，只依据报告内容分析，不编造。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.3,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        out = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+        if out:
+            return out
+    except Exception as e:
+        print(f"[FMT-AI] 报告分析失败: {e}")
+    return _analyze_gsx_report(report)
+
+
+def _analyze_gsx_report(result: str) -> str:
+    """根据验机报告提取重点，生成简短分析（规则式）"""
+    text = (result or "").strip()
+    if not text:
+        return ""
+    joined = text.replace("\n", " ")
+    points = []
+
+    m = _re.search(r"(?:型号|MODEL)[:：]\s*([^,\n]+?)(?=\s*(?:IMEI|SN|激活锁|ID黑白|$))", text, _re.IGNORECASE)
+    if m:
+        points.append(f"机型：{m.group(1).strip()[:40]}")
+
+    if "激活锁" in joined:
+        if "关闭" in joined or "无ID" in joined:
+            points.append("激活锁：关闭（无ID），设备干净可放心")
+        elif "开启" in joined or "有ID" in joined:
+            points.append("⚠️ 激活锁：开启（有ID），未退出iCloud/查找，购机需谨慎")
+        else:
+            mv = _re.search(r"激活锁[:：]\s*([^\n]+)", text)
+            if mv:
+                points.append(f"激活锁：{mv.group(1).strip()[:30]}")
+
+    if "白名单" in joined or "clean" in joined.lower():
+        points.append("ID状态：白名单（Clean），来源干净")
+    elif "黑名单" in joined or "blacklist" in joined.lower():
+        points.append("⚠️ ID状态：黑名单，存在风险")
+
+    if not points:
+        lines = [l.strip() for l in text.splitlines() if l.strip()][:2]
+        return "；".join(lines)
+    return "；".join(points)
+
+
 def _handle_sn_imei(user_id: int, platform_account_id: int, app_cid: str, code: str):
-    """检测到序列号/IMEI：调 GSX 验机 → 回复结果 → 写 WalleOrder"""
+    """序列号/IMEI 完整处理流程：
+    1) 苹果规则校验（不合法 → 直接反馈，不落库）
+    2) 合法 → 先写入/补全 WalleOrder（sn_imei，status=0 待验机）
+    3) 调 gsxunlocking 验机 API（srv 按订单 SKU 解析）
+    4) 按查询结果更新订单状态（成功=1 / 失败=2，结果存 verify_result）
+    5) 反馈客户
+    """
+    from backend.app.services.walle_agent.tools import normalize_sn_imei
+    normalized = normalize_sn_imei(code)
+    if not normalized:
+        _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                               f"您提供的 {code} 格式不对，请检查：IMEI 为 15 位数字，序列号（SN）为 8-14 位字母数字组合。")
+        return
+
+    # 店铺 GSX 配置（gsx_key 为 gsxunlocking API 密钥，留空时 query_gsx 自动读 config.json）
     from backend.app.core.database import SessionLocal
     from sqlalchemy import select as _select
     db = SessionLocal()
@@ -436,44 +973,145 @@ def _handle_sn_imei(user_id: int, platform_account_id: int, app_cid: str, code: 
                 WalleShopConfig.user_id == user_id,
             )
         ).first()
-        gsx_appid = shop_cfg.gsx_appid or "" if shop_cfg else ""
-        gsx_secret = shop_cfg.gsx_secret or "" if shop_cfg else ""
         gsx_key = shop_cfg.gsx_key or "" if shop_cfg else ""
     finally:
         db.close()
 
-    if not (gsx_appid and gsx_secret and gsx_key):
-        _fire_and_forget_reply(user_id, platform_account_id, app_cid,
-                               f"已收到您的序列号/IMEI：{code}，正在处理，请稍候。")
-        return
+    # 买家真实 userId（用于按订单 SKU 解析 srv 服务 ID）
+    buyer_user_id = _conv_customer_id(platform_account_id, app_cid)
 
-    # 调 GSX
-    from backend.app.services.walle_agent.tools import QueryGsxParams, query_gsx
-    result = query_gsx(QueryGsxParams(code=code, gsx_appid=gsx_appid, gsx_secret=gsx_secret, gsx_key=gsx_key))
-
-    reply = f"验机结果（{code}）：\n{result}"
-
-    # 写 WalleOrder
+    # ── 2) 先写入订单表：优先补全该会话待验机记录（[订单]卡创建的），无则新建 ──
     from backend.app.core.database import SessionLocal as _SL
     from backend.app.models.walle import WalleOrder
     from backend.app.core.time import shanghai_now
+    from sqlalchemy import select as _sel
     db2 = _SL()
+    order_id = None
+    order_spec = ""  # 订单规格（用于匹配 ark_product_skus.query_type 取服务ID）
     try:
-        db2.add(WalleOrder(
-            user_id=user_id,
-            platform_account_id=platform_account_id,
-            app_cid=app_cid,
-            sn_imei=code,
-            coupon_code="",
-            status=0,
-            created_at=shanghai_now(),
-            updated_at=shanghai_now(),
-        ))
-        db2.commit()
+        pending = db2.scalars(
+            _sel(WalleOrder).where(
+                WalleOrder.platform_account_id == platform_account_id,
+                WalleOrder.app_cid == app_cid,
+                WalleOrder.status == 0,
+            ).order_by(WalleOrder.id.desc())
+        ).first()
+        if pending:
+            pending.sn_imei = normalized
+            pending.updated_at = shanghai_now()
+            db2.commit()
+            order_id = pending.id
+            order_spec = pending.spec or ""
+        else:
+            row = WalleOrder(
+                user_id=user_id,
+                platform_account_id=platform_account_id,
+                app_cid=app_cid,
+                sn_imei=normalized,
+                coupon_code="",
+                status=0,
+                created_at=shanghai_now(),
+                updated_at=shanghai_now(),
+            )
+            db2.add(row)
+            db2.commit()
+            db2.refresh(row)
+            order_id = row.id
     finally:
         db2.close()
 
-    _fire_and_forget_reply(user_id, platform_account_id, app_cid, reply)
+    # ── 2.5) 查询前先反馈"正在查询"，避免买家等待无响应 ──────────────
+    _query_label = "IMEI" if normalized.isdigit() else "序列号"
+    _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                           f"正在查询{_query_label}：{normalized}，请稍等~")
+
+    # ── 3) 请求查询 API（srv：spec↔query_type 匹配 SKU → service_id）───────
+    from backend.app.services.walle_agent.tools import QueryGsxParams, query_gsx
+    result = query_gsx(QueryGsxParams(
+        code=normalized,
+        gsx_key=gsx_key,
+        buyer_user_id=buyer_user_id,
+        spec=order_spec,
+    ))
+    is_success = not (result.startswith("GSX 查询失败") or result.startswith("GSX 接口"))
+    if is_success:
+        # 验机报告智能排版（LLM 适配任意格式，零丢失；失败回退规则式）
+        result = _format_gsx_report_ai(result, user_id)
+
+    # ── 4) 更新订单状态（成功=1 / 失败=2，结果存 verify_result）──────
+    if order_id:
+        db3 = _SL()
+        try:
+            rec = db3.get(WalleOrder, order_id)
+            if rec:
+                rec.status = 1 if is_success else 2
+                rec.verify_result = {"ok": is_success, "result": result}
+                rec.updated_at = shanghai_now()
+                db3.commit()
+        finally:
+            db3.close()
+
+    # ── 4.5) 验机成功 → 无物流发货（发货内容 express_no = 验机报告）───
+    # 仅对待发货订单执行；已发货/已完成等订单跳过（接口本身也会拒绝）。
+    shipped = False
+    if is_success and buyer_user_id:
+        try:
+            from apis.xhs_walle_eva_apis import ArkAPI
+            from backend.app.services.walle_agent.tools import _PENDING_SHIP
+            api = ArkAPI()
+            ok2, msg2, res2 = api.get_orders_by_user(buyer_user_id)
+            if ok2 and res2:
+                pkgs = ((res2.get("data") or {}).get("packages")) or []
+                pkg = pkgs[0] if pkgs else {}
+                if pkg.get("status") in _PENDING_SHIP:
+                    pkg_id = pkg.get("packageId") or ""
+                    if pkg_id:
+                        # ⚠️ 发货内容（express_no）上限 200 字：完整报告放聊天消息，这里放报告前段
+                        ship_content = result[:190] + ("…" if len(result) > 190 else "")
+                        sok, smsg, sres = api.ship_no_logistics(
+                            package_id=pkg_id,
+                            express_no=ship_content,
+                        )
+                        shipped = sok
+                        print(f"[SHIP] 无物流发货 package={pkg_id} ok={sok} msg={smsg}")
+                    else:
+                        print(f"[SHIP] 订单 {pkg.get('orderId')} 无 packageId，跳过发货")
+                else:
+                    print(f"[SHIP] 订单状态 {pkg.get('status')} 非待发货，跳过发货")
+        except Exception as e:
+            print(f"[SHIP] 发货异常: {e}")
+
+    # ── 5) 反馈客户：验机报告独立一条 + 重点分析 + 五星好评感谢 ──────
+    if is_success:
+        head = f"✅ 验机成功（{normalized}）" + ("，订单已无物流发货" if shipped else "")
+        # 1) 验机报告独立一条发送
+        report_msg = f"{head}\n\n📋 验机报告：\n{result}"
+        _fire_and_forget_reply(user_id, platform_account_id, app_cid, report_msg)
+        # 2) 报告分析（AI 围绕激活锁/网络锁/设备信息/激活日期/黑名单 给优缺点）
+        analysis = _analyze_gsx_report_ai(result, user_id)
+        if analysis:
+            _fire_and_forget_reply(user_id, platform_account_id, app_cid, f"📌 报告分析：\n{analysis}")
+        # 3) 五星好评感谢
+        _fire_and_forget_reply(user_id, platform_account_id, app_cid,
+                               "如果满意请给个五星好评，感谢您的支持！有什么问题随时找我～ 😊")
+        reply = report_msg  # 供 Agent 上下文记录（报告内容）
+    else:
+        reply = f"验机查询未成功（{normalized}）：{result}"
+        _fire_and_forget_reply(user_id, platform_account_id, app_cid, reply)
+
+    # ── 6) 写入 Agent 会话上下文（walle_agent_sessions）─────────────
+    # 买家后续追问（如"激活锁什么意思？"）时，run_agent 加载的历史里要有
+    # 验机查询 + 验机报告，AI 才能依据报告继续回答。
+    try:
+        from backend.app.services.walle_agent.agent_loop import _save_message as _save_agent_msg
+        db4 = _SL()
+        try:
+            _save_agent_msg(db4, platform_account_id, app_cid, "user", f"验机查询：{normalized}")
+            _save_agent_msg(db4, platform_account_id, app_cid, "assistant", reply)
+        finally:
+            db4.close()
+    except Exception as e:
+        print(f"[AGENT-CTX] 写入失败: {e}")
 
 
 def _auto_ai_suggest(user_id: int, platform_account_id: int, app_cid: str, user_message: str):
@@ -496,7 +1134,7 @@ def _auto_ai_suggest(user_id: int, platform_account_id: int, app_cid: str, user_
         if not mc:
             return
         api_key = decrypt_text(mc.encrypted_api_key) if mc.encrypted_api_key else ""
-        vision_mc = db.scalars(select(ModelConfig).where(ModelConfig.user_id == user_id, ModelConfig.model_type == "vision")).first()
+        vision_mc = db.scalars(select(ModelConfig).where(ModelConfig.user_id == user_id, ModelConfig.model_type == "image")).first()
         vision_api_key = decrypt_text(vision_mc.encrypted_api_key) if vision_mc and vision_mc.encrypted_api_key else ""
         # 在 session 关闭前提前加载所有属性，避免 DetachedInstanceError
         from sqlalchemy.orm import make_transient
@@ -606,7 +1244,7 @@ def _upsert_conv(db: Session, user_id: int, app_cid: str, raw: dict, account: Op
                 app_cid=app_cid,
                 im_chat_id=raw.get("imChatId") or raw.get("im_chat_id"),
                 customer_name=customer.get("nickName") or "",
-                customer_id=customer.get("userId"),
+                customer_id=customer.get("userId") or (app_cid[-20:] if len(app_cid) >= 20 else app_cid),
                 receiver_app_uid=receiver_app_uid or None,
                 raw_json=raw,
                 created_at=now,

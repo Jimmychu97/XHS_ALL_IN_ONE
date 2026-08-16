@@ -110,7 +110,7 @@ class WalleAgentSession(Base):
 
 
 class WalleOrder(Base):
-    """核销订单，记录用户提交序列号/IMEI + 卡券后的核销流程"""
+    """验机订单，记录用户提交序列号/IMEI + 卡券后的验机流程"""
     __tablename__ = "walle_orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -125,6 +125,6 @@ class WalleOrder(Base):
     spec: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) # 规格
     order_sn: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # 平台订单号
     verify_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)   # 验机报告原始数据
-    status: Mapped[int] = mapped_column(Integer, default=0)                 # 0-待核销 1-成功 2-失败 3-已过期
+    status: Mapped[int] = mapped_column(Integer, default=0)                 # 0-待验机 1-成功 2-失败 3-已过期
     created_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now, onupdate=shanghai_now)

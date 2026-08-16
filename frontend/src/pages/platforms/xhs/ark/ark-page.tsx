@@ -90,6 +90,7 @@ type SkuDetail = {
   sku_name: string;
   query_type: string | null;
   service_id: string | null;
+  srv: string | null;
   variants: { name: string; value: string }[];
   price: number | null;
   stock: number | null;
@@ -102,7 +103,7 @@ type SkuDetail = {
 async function patchSku(
   productId: number,
   skuId: string,
-  data: { query_type?: string; service_id?: string },
+  data: { query_type?: string; service_id?: string; srv?: string },
 ): Promise<void> {
   await api.patch(`/ark/products/${productId}/skus/${skuId}`, data);
 }
@@ -125,7 +126,7 @@ export function ProductsTab() {
   const [skusLoading, setSkusLoading] = useState(false);
   const [skusLoadedFor, setSkusLoadedFor] = useState<number | null>(null);
   const [editingSkuId, setEditingSkuId] = useState<string | null>(null);
-  const [editingValues, setEditingValues] = useState<{ query_type: string; service_id: string }>({ query_type: "", service_id: "" });
+  const [editingValues, setEditingValues] = useState<{ query_type: string; service_id: string; srv: string }>({ query_type: "", service_id: "", srv: "" });
   const [savingSkuId, setSavingSkuId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [form] = Form.useForm();
@@ -382,6 +383,19 @@ export function ProductsTab() {
                             />
                           ) : (v || "-"),
                       },
+                      {
+                        title: "GSX服务码(srv)",
+                        dataIndex: "srv",
+                        render: (v: string | null, row: SkuDetail) =>
+                          editingSkuId === row.sku_id ? (
+                            <Input
+                              size="small"
+                              placeholder="如 1010"
+                              value={editingValues.srv}
+                              onChange={e => setEditingValues(prev => ({ ...prev, srv: e.target.value }))}
+                            />
+                          ) : (v || "-"),
+                      },
                       { title: "价格", dataIndex: "price", render: (v: number | null) => v != null ? `¥${(v / 100).toFixed(2)}` : "-" },
                       { title: "库存", dataIndex: "stock", render: (v: number | null) => v ?? "-" },
                       { title: "发货时效", dataIndex: "delivery_time", render: (v: string | null) => v ? `${v}h` : "-" },
@@ -403,7 +417,12 @@ export function ProductsTab() {
                                   await patchSku(detailProduct.id, row.sku_id, editingValues);
                                   setSkus(prev => prev.map(s =>
                                     s.sku_id === row.sku_id
-                                      ? { ...s, query_type: editingValues.query_type || null, service_id: editingValues.service_id || null }
+                                      ? {
+                                          ...s,
+                                          query_type: editingValues.query_type || null,
+                                          service_id: editingValues.service_id || null,
+                                          srv: editingValues.srv || null,
+                                        }
                                       : s
                                   ));
                                   setEditingSkuId(null);
@@ -425,6 +444,7 @@ export function ProductsTab() {
                                 setEditingValues({
                                   query_type: row.query_type || "",
                                   service_id: row.service_id || "",
+                                  srv: row.srv || "",
                                 });
                               }}
                             />

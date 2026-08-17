@@ -244,6 +244,7 @@ async def _daemon_mode():
             await page.goto(ARK_URL, wait_until="domcontentloaded", timeout=30000)
             n = await _save_cookies(context)
             print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 初始 cookie 已保存 ({n} 条)")
+            await _check_session_valid(page)
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 初始加载失败: {e}")
 
@@ -254,6 +255,7 @@ async def _daemon_mode():
                 await page.reload(wait_until="domcontentloaded", timeout=30000)
                 n = await _save_cookies(context)
                 print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] cookie 已刷新 ({n} 条)")
+                await _check_session_valid(page)
             except Exception as e:
                 print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 刷新失败: {e}，5 秒后重试...")
                 await asyncio.sleep(5)
@@ -261,8 +263,27 @@ async def _daemon_mode():
                     await page.goto(ARK_URL, wait_until="domcontentloaded", timeout=30000)
                     n = await _save_cookies(context)
                     print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 重试成功 ({n} 条)")
+                    await _check_session_valid(page)
                 except Exception as e2:
                     print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 重试失败: {e2}")
+
+
+async def _check_session_valid(page) -> None:
+    """校验 ark 会话是否仍有效（页面内 fetch seller/info，code=0 为有效）"""
+    try:
+        valid = await page.evaluate("""
+            async () => {
+                try {
+                    const r = await fetch('/api/edith/seller/info/v2', {credentials: 'include'});
+                    const j = await r.json();
+                    return (j.code === 0) || (j.success === true);
+                } catch (e) { return false; }
+            }
+        """)
+        if not valid:
+            print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），请打开浏览器人工确认登录态")
+    except Exception:
+        pass
 
 
 def _save_sku_to_db(item_id: str, extras: dict):

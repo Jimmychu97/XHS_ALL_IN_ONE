@@ -102,9 +102,103 @@ class AccountHeartbeatScheduler:
 
         return result
 
+    def _write_notification(self, db: Session, title: str, body: str, level: str = "warning") -> None:
+        """写入站内通知（同一标题 1 小时内已有则跳过，避免刷屏）"""
+        from datetime import timedelta
+        from backend.app.models.notification import Notification
+        from backend.app.core.time import shanghai_now
+        dup = db.scalars(
+            select(Notification).where(
+                Notification.title == title,
+                Notification.created_at >= shanghai_now() - timedelta(hours=1),
+            ).limit(1)
+        ).first()
+        if dup:
+            return
+        db.add(Notification(user_id=1, title=title, body=body, level=level,
+                            source_type="system", created_at=shanghai_now()))
+        db.commit()
+
+    def check_aux_credentials(self) -> None:
+        """检查 walle/ark/backend_token 凭证新鲜度（异常写通知）+ 数据库每日备份"""
+        import pathlib
+        import time as _time
+        import shutil as _shutil
+        issues: list[tuple[str, str]] = []
+
+        # 1) 平台后端 token（backend_token.txt）
+        tf = pathlib.Path("F:/eva/backend_token.txt")
+        if not tf.exists():
+            issues.append(("平台后端 token", "F:/eva/backend_token.txt 不存在"))
+        else:
+            from backend.app.core.security import decode_token
+            try:
+                payload = decode_token(tf.read_text("utf-8").strip())
+                exp = payload.get("exp", 0)
+                if exp - _time.time() < 3 * 86400:
+                    issues.append(("平台后端 token", f"剩余有效期 < 3 天（约 {int((exp - _time.time()) / 3600)}h），将自动续期"))
+            except Exception:
+                issues.append(("平台后端 token", "无效或已过期，将自动续期"))
+
+        # 2) Walle 凭证
+        for f, label in (
+            ("F:/eva/eva_cookies.json", "Walle 凭证 eva_cookies"),
+            ("F:/eva/edith_auth.json", "Walle 凭证 edith_auth"),
+        ):
+            p = pathlib.Path(f)
+            if not p.exists():
+                issues.append((label, "文件不存在（请确认客服工作台在运行）"))
+            else:
+                age = _time.time() - p.stat().st_mtime
+                if age > 7200:
+                    issues.append((label, f"已 {int(age / 3600)} 小时未更新"))
+
+        # 3) Ark cookies
+        ac = pathlib.Path("data/ark_cookies.json")
+        if ac.exists():
+            age = _time.time() - ac.stat().st_mtime
+            if age > 3600:
+                issues.append(("Ark cookies", f"已 {int(age / 60)} 分钟未刷新（ark_capture daemon 是否存活？）"))
+
+        with SessionLocal() as db:
+            for title, body in issues:
+                logger.warning(f"[凭证检查] {title}: {body}")
+                self._write_notification(db, f"[凭证检查] {title}", body)
+
+        # 4) 数据库每日备份（保留 7 天）
+        try:
+            backup_dir = pathlib.Path("data/backup")
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            db_file = pathlib.Path("data/spider_xhs.db")
+            latest = backup_dir / "latest.txt"
+            need = True
+            if latest.exists():
+                try:
+                    if _time.time() - float(latest.read_text("utf-8").strip()) < 86400:
+                        need = False
+                except Exception:
+                    pass
+            if need and db_file.exists():
+                target = backup_dir / f"spider_xhs_{_time.strftime('%Y%m%d_%H%M%S')}.db"
+                _shutil.copy2(db_file, target)
+                latest.write_text(str(_time.time()))
+                cutoff = _time.time() - 7 * 86400
+                for old in backup_dir.glob("spider_xhs_*.db"):
+                    if old.stat().st_mtime < cutoff:
+                        old.unlink(missing_ok=True)
+                logger.info(f"数据库已备份: {target.name}")
+        except Exception as e:
+            logger.warning(f"数据库备份失败: {e}")
+
     async def run_heartbeat_check(self):
         """执行一次心跳检测"""
         logger.info("开始账号心跳检测...")
+
+        # 凭证新鲜度检查（walle/ark/backend_token）+ 数据库备份
+        try:
+            self.check_aux_credentials()
+        except Exception as e:
+            logger.error(f"辅助凭证检查失败: {e}")
 
         with SessionLocal() as db:
             # 查询所有账号，在 Python 层过滤 auto_renew

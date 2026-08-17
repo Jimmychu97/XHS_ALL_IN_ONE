@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,13 +17,49 @@ from backend.app.services.scheduler_service import run_due_auto_tasks, shutdown_
 from backend.app.services.heartbeat_scheduler import start_heartbeat_scheduler, stop_heartbeat_scheduler
 
 
+def _start_token_self_heal() -> threading.Thread:
+    """backend_token.txt 自愈：每小时检查，临期(<3天)/无效自动重签，不依赖用户打开页面"""
+    def _loop() -> None:
+        import time as _time
+        import pathlib
+        from backend.app.core.security import create_refresh_token, decode_token
+        token_file = pathlib.Path("F:/eva/backend_token.txt")
+        while True:
+            try:
+                need = False
+                if not token_file.exists():
+                    need = True
+                else:
+                    tok = token_file.read_text("utf-8").strip()
+                    try:
+                        payload = decode_token(tok)
+                        exp = payload.get("exp", 0)
+                        if exp - _time.time() < 3 * 86400:
+                            need = True
+                    except Exception:
+                        need = True
+                if need:
+                    token_file.write_text(create_refresh_token(1), encoding="utf-8")
+                    print("[token-heal] backend_token 已自动续期")
+            except Exception as e:
+                print(f"[token-heal] 失败: {e}")
+            _time.sleep(3600)
+
+    t = threading.Thread(target=_loop, name="token-heal", daemon=True)
+    t.start()
+    return t
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     settings = get_settings()
     scheduler = None
     heartbeat = None
-    
+
+    # token 自愈（无条件启动，与 scheduler 开关无关）
+    _token_heal = _start_token_self_heal()
+
     if settings.scheduler_enabled:
         scheduler = start_due_publish_scheduler(settings.scheduler_interval_seconds)
         # 启动心跳检测（每 1 小时检测一次）

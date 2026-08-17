@@ -4,11 +4,75 @@ import argparse
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Optional, Sequence
 
 
 ROOT = Path(__file__).resolve().parent
+
+
+class _Supervisor:
+    """子进程守护：异常退出自动重启（指数退避，上限 60s）；stop_event 触发后停止不再拉起"""
+
+    def __init__(self, name: str, starter, stop_event: threading.Event, max_delay: int = 60):
+        self.name = name
+        self.starter = starter
+        self.stop_event = stop_event
+        self.max_delay = max_delay
+        self.proc: Optional[subprocess.Popen] = None
+
+    def _run(self) -> None:
+        failures = 0
+        while not self.stop_event.is_set():
+            try:
+                self.proc = self.starter()
+            except Exception as e:
+                print(f"[supervisor] {self.name} 启动失败: {e}")
+                failures += 1
+                if self.stop_event.wait(min(5 * failures, self.max_delay)):
+                    return
+                continue
+            if self.proc is None:
+                print(f"[supervisor] {self.name} 无可启动脚本，退出守护")
+                return
+            print(f"[supervisor] {self.name} 已启动 pid={self.proc.pid}")
+            self.proc.wait()
+            if self.stop_event.is_set():
+                return
+            failures += 1
+            delay = min(5 * failures, self.max_delay)
+            print(f"[supervisor] {self.name} 异常退出(code={self.proc.returncode})，{delay}s 后重启(第{failures}次)")
+            if self.stop_event.wait(delay):
+                return
+
+    def start(self) -> threading.Thread:
+        t = threading.Thread(target=self._run, name=f"sup-{self.name}", daemon=True)
+        t.start()
+        return t
+
+    def stop(self) -> None:
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+            except Exception:
+                pass
+
+
+def _setup_rotating_log() -> None:
+    """uvicorn/后端 logging 输出镜像到 data/logs/backend.log（按天轮转，保留 14 天）"""
+    import logging
+    from logging.handlers import TimedRotatingFileHandler
+    try:
+        log_dir = ROOT / "data" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = TimedRotatingFileHandler(
+            log_dir / "backend.log", when="midnight", backupCount=14, encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(handler)
+    except Exception as e:
+        print(f"[log] 日志轮转初始化失败: {e}")
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -81,6 +145,7 @@ def start_ark_capture() -> Optional[subprocess.Popen]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
+    _setup_rotating_log()
 
     # Resolve host/port: CLI args take precedence, then YAML/env config defaults
     host = args.host
@@ -96,21 +161,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except Exception:
         pass
 
+    stop_event = threading.Event()
     frontend_process = start_frontend(args.frontend_port) if args.with_frontend else None
-    watcher_process = start_cookie_watcher()
-    ark_process = start_ark_capture()
+    # cookie_watcher / ark_capture 由守护线程监控，异常退出自动重启
+    watcher_sup = _Supervisor("cookie_watcher", start_cookie_watcher, stop_event)
+    ark_sup = _Supervisor("ark_capture", start_ark_capture, stop_event)
+    watcher_sup.start()
+    ark_sup.start()
 
     print(f"Starting backend at http://{host}:{port}")
     try:
         import uvicorn
         uvicorn.run("backend.app.main:app", host=host, port=port, reload=args.reload)
     finally:
+        stop_event.set()
+        watcher_sup.stop()
+        ark_sup.stop()
         if frontend_process and frontend_process.poll() is None:
             frontend_process.terminate()
-        if watcher_process and watcher_process.poll() is None:
-            watcher_process.terminate()
-        if ark_process and ark_process.poll() is None:
-            ark_process.terminate()
     return 0
 
 

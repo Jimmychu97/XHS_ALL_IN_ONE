@@ -60,6 +60,19 @@ conn.close()
 
 ## Token / Cookie 机制
 
+## 稳定性加固（2026-08-16 实施）
+
+1. **进程守护**（`main.py _Supervisor`）：cookie_watcher / ark_capture 异常退出自动重启
+   （指数退避 5s→60s），停止时不再拉起；uvicorn 退出时统一 terminate。
+2. **backend_token 自愈**（`backend/app/main.py _start_token_self_heal`）：后端启动即检查
+   `F:\eva\backend_token.txt`，临期(<3天)/无效自动重签，不依赖用户打开页面。
+3. **心跳凭证检查**（`heartbeat_scheduler.check_aux_credentials`）：每小时检查
+   backend_token / eva_cookies / edith_auth / ark_cookies 新鲜度，异常写入 `notifications` 表（1小时去重）。
+4. **数据库每日备份**：`data/backup/spider_xhs_YYYYMMDD_HHMMSS.db`，保留 7 天。
+5. **日志轮转**：uvicorn/后端 logging 镜像到 `data/logs/backend.log`（按天轮转，保留 14 天）。
+6. **Ark daemon 会话校验**（`ark_capture.py _check_session_valid`）：每次刷新后页面内
+   fetch `seller/info/v2` 校验 code=0，失效打印告警提示人工登录。
+
 ### Token / Cookie 机制
 
 #### ⚠️ backend_token.txt 过期问题（2026-08-16 已修复）

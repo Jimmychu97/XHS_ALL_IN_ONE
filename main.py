@@ -16,7 +16,7 @@ EVA_CDP_PORT = 9222
 
 
 def resolve_eva_dir() -> str:
-    """解析 EVA（千帆客服工作台）安装目录：EVA_DIR 环境变量 > 配置文件 walle.eva_dir > F:\\eva"""
+    """解析 EVA（千帆客服工作台）安装目录：EVA_DIR > 配置 > 自动探测常见盘符 > F:\\eva"""
     env = os.environ.get("EVA_DIR", "").strip()
     if env:
         return env
@@ -27,7 +27,11 @@ def resolve_eva_dir() -> str:
             return d
     except Exception:
         pass
-    return r"F:\eva"
+    try:
+        from xhs_utils.eva_env import get_eva_dir as _resolver
+        return str(_resolver())
+    except Exception:
+        return r"F:\eva"
 
 
 def find_eva_executable(eva_dir: str) -> Optional[Path]:

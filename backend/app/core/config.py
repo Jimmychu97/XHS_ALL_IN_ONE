@@ -172,11 +172,19 @@ def get_settings() -> Settings:
 
 
 def get_eva_dir() -> str:
-    """返回 EVA（千帆客服工作台）安装目录；未配置时回退到默认 F:\\eva"""
+    """返回 EVA（千帆客服工作台）安装目录。
+
+    优先级：EVA_DIR 环境变量 / walle.eva_dir 配置 > 自动探测常见盘符 > 默认 F:\\eva。
+    这样每台机器安装了千帆工作台后零配置即可用（装 C 盘就用 C:\\eva，装 D 盘就用 D:\\eva）。
+    """
     try:
         d = get_settings().walle_eva_dir
     except Exception:
         d = ""
     if d:
         return d
-    return r"F:\eva"
+    try:
+        from xhs_utils.eva_env import get_eva_dir as _resolve
+        return str(_resolve())
+    except Exception:
+        return r"F:\eva"

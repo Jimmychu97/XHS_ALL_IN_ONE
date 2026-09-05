@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 def _resolve_default_eva_dir() -> str:
-    """默认 EVA 目录：环境变量 EVA_DIR > config/default.yaml walle.eva_dir > F:/eva"""
+    """默认 EVA 目录：环境变量 EVA_DIR > config/default.yaml walle.eva_dir > 自动探测 > F:/eva"""
     env = os.environ.get("EVA_DIR", "").strip()
     if env:
         return env
@@ -29,6 +29,11 @@ def _resolve_default_eva_dir() -> str:
             val = (data.get("walle") or {}).get("eva_dir")
             if val:
                 return str(val)
+    except Exception:
+        pass
+    try:
+        from xhs_utils.eva_env import get_eva_dir as _resolver
+        return str(_resolver())
     except Exception:
         pass
     return "F:/eva"

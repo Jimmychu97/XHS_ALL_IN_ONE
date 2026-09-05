@@ -58,6 +58,7 @@ IGNORE_EXTS = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", "
 _log_file: Path | None = None
 _log_fp = None
 _last_at_token: str = ""
+_no_open_browser = False
 
 
 def _init_log():
@@ -241,6 +242,7 @@ async def _daemon_mode():
     常驻模式：headless 后台保活，每 30 分钟刷新 cookie。
     发现会话失效（自身检测或收到后端同步请求）时，自动切到有头浏览器请人工确认登录态，
     登录恢复后保存 cookie 并切回 headless 保活。
+    --no-open-browser 时（云服务器/无桌面环境）不打开有头浏览器，仅打印日志并继续后台保活。
     """
     print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ark cookie 保活服务启动（会话失效将自动打开浏览器请人工登录）")
     headless = True
@@ -276,10 +278,14 @@ async def _daemon_mode():
                 print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 初始加载失败: {e}")
                 session_ok = False
 
-            # headless 模式下若初始会话即失效 → 直接切有头浏览器
+            # headless 模式下若初始会话即失效 → 有头浏览器（或 --no-open-browser 时仅告警）
             if headless and not session_ok:
-                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），自动打开浏览器请人工确认登录态")
-                headless = False
+                if _no_open_browser:
+                    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），--no-open-browser 模式不打开浏览器，等待 10 分钟后重试")
+                    await asyncio.sleep(600)
+                else:
+                    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），自动打开浏览器请人工确认登录态")
+                    headless = False
                 await context.close()
                 continue
 
@@ -305,10 +311,16 @@ async def _daemon_mode():
             last_refresh = time.time()
             while True:
                 if _relogin_requested():
-                    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 收到登录失效信号，自动打开浏览器请人工确认登录态")
+                    if _no_open_browser:
+                        print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 收到登录失效信号，--no-open-browser 模式不打开浏览器")
+                    else:
+                        print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 收到登录失效信号，自动打开浏览器请人工确认登录态")
                     _clear_relogin_flag()
-                    headless = False
-                    break
+                    if _no_open_browser:
+                        last_refresh = 0  # 立即强制刷新一次继续保活
+                    else:
+                        headless = False
+                        break
                 if time.time() - last_refresh >= COOKIE_REFRESH_INTERVAL:
                     last_refresh = time.time()
                     try:
@@ -316,9 +328,12 @@ async def _daemon_mode():
                         n = await _save_cookies(context)
                         print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] cookie 已刷新 ({n} 条)")
                         if not await _check_session_valid(page):
-                            print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），自动打开浏览器请人工确认登录态")
-                            headless = False
-                            break
+                            if _no_open_browser:
+                                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），--no-open-browser 模式不打开浏览器")
+                            else:
+                                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），自动打开浏览器请人工确认登录态")
+                                headless = False
+                                break
                     except Exception as e:
                         print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 刷新失败: {e}，5 秒后重试...")
                         await asyncio.sleep(5)
@@ -508,7 +523,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--daemon", action="store_true", help="常驻保活模式（headless，自动刷新 cookie）")
     parser.add_argument("--sync-skus", action="store_true", help="SKU 同步模式：批量抓取所有商品规格写入数据库")
+    parser.add_argument("--no-open-browser", action="store_true",
+                        help="会话失效时不打开有头浏览器（云服务器/无桌面环境），仅打日志继续后台保活")
     args = parser.parse_args()
+
+    if args.no_open_browser:
+        _no_open_browser = True
 
     if args.daemon:
         asyncio.run(_daemon_mode())

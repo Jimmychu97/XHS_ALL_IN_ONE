@@ -53,7 +53,7 @@ BACKEND_BASE = _args.backend.rstrip("/")
 BACKEND_SYNC_URL = BACKEND_BASE + "/api/walle/push-message"
 BACKEND_TOKEN_FILE = _EVA_DIR / "backend_token.txt"
 
-CDP_URL = f"http://localhost:{_args.cdp_port}"
+CDP_URL = f"http://127.0.0.1:{_args.cdp_port}"
 WALLE_SAVE = _EVA_DIR / "eva_cookies.json"
 EDITH_SAVE = _EVA_DIR / "edith_auth.json"
 ARK_COOKIE_SAVE = pathlib.Path("data/ark_cookies.json")
@@ -176,6 +176,11 @@ def _save_ark_at_token(at_token: str):
     print(f"[{time.strftime('%H:%M:%S')}] ark AT token 已保存")
 
 
+def _cdp_ws_url(raw: str) -> str:
+    """CDP 返回的 webSocketDebuggerUrl 常为 ws://localhost:9222/...，统一换成 127.0.0.1 避免 IPv6 坑"""
+    return raw.replace("://localhost:", "://127.0.0.1:")
+
+
 def get_all_pages() -> list[dict]:
     return json.loads(urllib.request.urlopen(f"{CDP_URL}/json").read())
 
@@ -184,7 +189,7 @@ def find_workbench_ws() -> str:
     for p in get_all_pages():
         url = p.get("url", "")
         if "walle.xiaohongshu.com" in url and "login" not in url and p.get("type") == "page":
-            return p["webSocketDebuggerUrl"]
+            return _cdp_ws_url(p["webSocketDebuggerUrl"])
     raise RuntimeError("找不到工作台页面，请确认客服工作台已启动并登录")
 
 
@@ -193,7 +198,7 @@ def find_ark_ws() -> str | None:
     try:
         for p in get_all_pages():
             if "ark.xiaohongshu.com" in p.get("url", "") and p.get("type") == "page":
-                return p["webSocketDebuggerUrl"]
+                return _cdp_ws_url(p["webSocketDebuggerUrl"])
     except Exception:
         pass
     return None

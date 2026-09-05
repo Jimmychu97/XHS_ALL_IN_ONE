@@ -39,6 +39,7 @@ def _start_token_self_heal() -> threading.Thread:
                     except Exception:
                         need = True
                 if need:
+                    token_file.parent.mkdir(parents=True, exist_ok=True)
                     token_file.write_text(create_refresh_token(1), encoding="utf-8")
                     print("[token-heal] backend_token 已自动续期")
             except Exception as e:

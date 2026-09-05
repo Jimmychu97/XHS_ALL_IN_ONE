@@ -158,10 +158,16 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     yaml_values = _load_yaml_config()
-    # EVA_DIR 环境变量优先于 YAML 配置（walle.eva_dir）
+    # 环境变量优先于 YAML（README 声明：config/default.yaml < CONFIG_FILE < .env < 环境变量）
     env_eva = os.environ.get("EVA_DIR", "").strip()
     if env_eva:
         yaml_values["walle_eva_dir"] = env_eva
+    env_static = os.environ.get("FRONTEND_SERVE_STATIC", "").strip()
+    if env_static:
+        yaml_values["frontend_serve_static"] = env_static.lower() in ("1", "true", "yes", "on")
+    env_build = os.environ.get("FRONTEND_BUILD_DIR", "").strip()
+    if env_build:
+        yaml_values["frontend_build_dir"] = env_build
     return Settings(**yaml_values)
 
 

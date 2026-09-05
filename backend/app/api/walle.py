@@ -20,6 +20,13 @@ from backend.app.models import AccountCookieVersion, PlatformAccount
 from backend.app.schemas.common import paginated
 from backend.app.services.account_service import serialize_account, upsert_platform_account_from_login
 
+def _cdp_ws_url(raw: str) -> str:
+    """CDP 返回的 webSocketDebuggerUrl 常为 ws://localhost:9222/...，统一换成 127.0.0.1 避免 IPv6 坑"""
+    if raw and "://localhost:" in raw:
+        return raw.replace("://localhost:", "://127.0.0.1:")
+    return raw
+
+
 router = APIRouter(prefix="/walle", tags=["walle"])
 
 # ── in-memory log bus ─────────────────────────────────────────────────────────
@@ -1371,7 +1378,9 @@ def save_backend_token(
     from backend.app.core.security import create_refresh_token
     import pathlib
     token = create_refresh_token(current_user.id)
-    (pathlib.Path(get_eva_dir()) / "backend_token.txt").write_text(token, encoding="utf-8")
+    token_file = pathlib.Path(get_eva_dir()) / "backend_token.txt"
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(token, encoding="utf-8")
     return {"ok": True}
 
 
@@ -1387,9 +1396,9 @@ def auto_import_eva(
     eva_path = f"{eva_dir}/eva_cookies.json"
     cookies: dict = {}
     try:
-        pages = _json.loads(_ur.urlopen("http://localhost:9222/json", timeout=2).read())
+        pages = _json.loads(_ur.urlopen("http://127.0.0.1:9222/json", timeout=2).read())
         ws_url = next(
-            (p["webSocketDebuggerUrl"] for p in pages
+            (_cdp_ws_url(p["webSocketDebuggerUrl"]) for p in pages
              if "walle.xiaohongshu.com" in p.get("url", "") and "login" not in p.get("url", "") and p.get("type") == "page"),
             None
         )
@@ -1447,9 +1456,9 @@ def import_eva_account(
 
     # 1. 优先从 CDP 实时抓
     try:
-        pages = _json.loads(_ur.urlopen("http://localhost:9222/json", timeout=2).read())
+        pages = _json.loads(_ur.urlopen("http://127.0.0.1:9222/json", timeout=2).read())
         ws_url = next(
-            (p["webSocketDebuggerUrl"] for p in pages
+            (_cdp_ws_url(p["webSocketDebuggerUrl"]) for p in pages
              if "walle.xiaohongshu.com" in p.get("url", "") and "login" not in p.get("url", "") and p.get("type") == "page"),
             None
         )

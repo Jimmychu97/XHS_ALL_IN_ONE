@@ -12,7 +12,7 @@ from loguru import logger
 
 from xhs_utils.eva_env import get_eva_path
 
-CDP_URL = "http://localhost:9222"
+CDP_URL = "http://127.0.0.1:9222"
 WALLE_SAVE = get_eva_path("eva_cookies.json")
 EDITH_SAVE = get_eva_path("edith_auth.json")
 _ARK_DEFAULT_SAVE = get_eva_path("ark_cookies.json")  # 旧路径兼容
@@ -47,12 +47,19 @@ def _load_edith_auth() -> str:
     return auth
 
 
+def _cdp_ws_url(raw: str) -> str:
+    """CDP 返回的 webSocketDebuggerUrl 常为 ws://localhost:9222/...，统一换成 127.0.0.1 避免 IPv6 坑"""
+    if raw and "://localhost:" in raw:
+        return raw.replace("://localhost:", "://127.0.0.1:")
+    return raw
+
+
 def _find_workbench_ws() -> str:
     pages = json.loads(urllib.request.urlopen(f"{CDP_URL}/json").read())
     for p in pages:
         url = p.get("url", "")
         if "walle.xiaohongshu.com" in url and "login" not in url and p.get("type") == "page":
-            return p["webSocketDebuggerUrl"]
+            return _cdp_ws_url(p["webSocketDebuggerUrl"])
     raise RuntimeError("找不到工作台页面")
 
 
@@ -282,7 +289,7 @@ async def _ark_page_fetch(api_path: str, method: str = "GET", body: dict = None,
     ws_url = None
     for p in pages:
         if "ark.xiaohongshu.com" in p.get("url", "") and p.get("type") == "page":
-            ws_url = p["webSocketDebuggerUrl"]
+            ws_url = _cdp_ws_url(p["webSocketDebuggerUrl"])
             break
     if not ws_url:
         return await _ark_direct_fetch(api_path, method, body, cookie_file)

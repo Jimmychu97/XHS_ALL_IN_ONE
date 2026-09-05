@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 def _resolve_default_eva_dir() -> str:
-    """默认 EVA 目录：环境变量 EVA_DIR > config/default.yaml walle.eva_dir > 自动探测 > F:/eva"""
+    """默认 EVA 目录：环境变量 EVA_DIR > config/default.yaml walle.eva_dir > 自动探测 > <项目盘>:\eva"""
     env = os.environ.get("EVA_DIR", "").strip()
     if env:
         return env

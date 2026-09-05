@@ -16,7 +16,7 @@ EVA_CDP_PORT = 9222
 
 
 def resolve_eva_dir() -> str:
-    """解析 EVA（千帆客服工作台）安装目录：EVA_DIR > 配置 > 自动探测常见盘符 > F:\\eva"""
+    """解析 EVA（千帆客服工作台）安装目录：EVA_DIR > 配置 > 自动探测常见盘符 > <项目盘>:\\eva"""
     env = os.environ.get("EVA_DIR", "").strip()
     if env:
         return env
@@ -28,8 +28,12 @@ def resolve_eva_dir() -> str:
     except Exception:
         pass
     try:
-        from xhs_utils.eva_env import get_eva_dir as _resolver
-        return str(_resolver())
+        from xhs_utils.eva_env import get_eva_dir, _discover_eva_dir
+        resolved = get_eva_dir()
+        # 命中兜底：仅当自动探测失败时打印提示，便于排障
+        if not _discover_eva_dir():
+            print(f"[eva] 未自动探测到已安装的客服工作台，使用默认目录: {resolved}")
+        return str(resolved)
     except Exception:
         return r"F:\eva"
 
@@ -174,15 +178,17 @@ def start_frontend(port: int, host: str = "127.0.0.1") -> Optional[subprocess.Po
         print("frontend/package.json not found; skipping frontend startup.")
         return None
 
-    # 依赖未安装时 vite 会报 "'vite' 不是内部或外部命令"，提前给出提示并跳过
+    # 依赖未安装时自动 npm install（一键启动，用户无需手动进 frontend 装依赖）
     if not (frontend_dir / "node_modules").exists():
-        print("[frontend] frontend/node_modules 不存在，跳过 Vite dev server。")
-        print("[frontend] 请先安装依赖：cd frontend && npm install；")
-        print("[frontend] 或构建静态前端后用 --serve-static 由后端托管。")
-        return None
+        print("[frontend] frontend/node_modules 不存在，自动安装依赖（npm install，首次约 1~3 分钟）...")
+        if not _install_frontend_deps():
+            print("[frontend] 依赖安装失败，跳过 Vite dev server。")
+            print("[frontend] 可手动执行 cd frontend && npm install；")
+            print("[frontend] 或先用 --serve-static 由后端托管构建产物。")
+            return None
 
     command = build_frontend_command(port, host)
-    print(f"Starting frontend at http://{host}:{port}")
+    print(f"[frontend] 启动 Vite dev server: http://{host}:{port}")
     return subprocess.Popen(command, cwd=str(frontend_dir), stdout=sys.stdout, stderr=sys.stderr)
 
 
@@ -191,6 +197,18 @@ def _ensure_npm() -> str:
     if not npm:
         raise FileNotFoundError("npm was not found on PATH; cannot build the frontend automatically.")
     return npm
+
+
+def _install_frontend_deps() -> bool:
+    """安装 frontend 依赖（npm install），成功返回 True"""
+    frontend_dir = ROOT / "frontend"
+    try:
+        npm = _ensure_npm()
+        subprocess.run([npm, "install", "--no-audit", "--no-fund"], cwd=str(frontend_dir), timeout=900)
+        return (frontend_dir / "node_modules").exists()
+    except Exception as e:
+        print(f"[frontend] npm install 失败: {e}")
+        return False
 
 
 def _build_frontend() -> bool:
@@ -202,9 +220,7 @@ def _build_frontend() -> bool:
         npm = _ensure_npm()
         print("[frontend] 正在安装依赖并构建前端（npm install && npm run build），可能需要几分钟...")
         if not (frontend_dir / "node_modules").exists():
-            subprocess.run([npm, "install"], cwd=str(frontend_dir), timeout=900)
-        else:
-            subprocess.run([npm, "install"], cwd=str(frontend_dir), timeout=900)
+            _install_frontend_deps()
         subprocess.run([npm, "run", "build"], cwd=str(frontend_dir), timeout=900)
         return (frontend_dir / "dist" / "index.html").exists()
     except Exception as e:
@@ -218,7 +234,8 @@ def start_cookie_watcher() -> Optional[subprocess.Popen]:
     # 依赖前置检查：EVA 目录必须存在（cookie_watcher 依赖客服工作台的 CDP 9222）
     if not Path(eva_dir).is_dir():
         print(f"[watcher] EVA 目录不存在（{eva_dir}），跳过 cookie_watcher 凭证保活服务")
-        print("[watcher] 若本机安装了千帆客服工作台，请设置 EVA_DIR 环境变量或 --eva-dir 指定实际目录")
+        print("[watcher] 若已安装千帆客服工作台，可在网页『设置』、config/default.yaml 的 walle.eva_dir")
+        print("[watcher] 或环境变量 EVA_DIR / --eva-dir 中指定实际目录，然后重启 main.py")
         return None
 
     # Prefer project-internal copy, fall back to eva_dir
@@ -278,6 +295,15 @@ def start_ark_capture(no_open_browser: bool = False) -> Optional[subprocess.Pope
     return subprocess.Popen(cmd)
 
 
+def _print_eva_help() -> None:
+    """EVA 目录缺失时的指引：三种设置方式 + 自动探测说明"""
+    print("[eva] 指定 EVA 安装目录的三种方式（任选其一，重启 main.py 生效）:")
+    print("[eva]   1. 打开网页『设置』填写 EVA 安装目录（保存到 config/default.yaml 的 walle.eva_dir）")
+    print("[eva]   2. 编辑 config/default.yaml：walle: { eva_dir: C:/eva }")
+    print("[eva]   3. 启动参数或环境变量：python main.py --eva-dir C:/eva  或  set EVA_DIR=C:/eva")
+    print("[eva] 不指定时程序会自动探测各盘符下已安装的千帆客服工作台")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     _setup_rotating_log()
@@ -288,23 +314,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args.skip_eva = True
         args.skip_watcher = True
 
-    # 一键启动：EVA_DIR 环境变量 / --eva-dir 参数 > YAML 配置
+    # 一键启动：EVA_DIR 环境变量 / --eva-dir 参数 > YAML 配置 > 自动探测 > <项目盘>:\eva
     eva_dir = args.eva_dir.strip() or resolve_eva_dir()
     if args.eva_dir.strip():
         os.environ["EVA_DIR"] = args.eva_dir.strip()
+    eva_dir_ok = Path(eva_dir).is_dir()
     print(f"[eva] EVA 安装目录: {eva_dir}")
+    if not eva_dir_ok:
+        print(f"[eva] 未找到该目录（{eva_dir}），客服工作台自动启动 / cookie_watcher 将跳过")
+        _print_eva_help()
 
-    # ── 前端模式决策 ──────────────────────────────────────────────
-    # 1) --serve-static / 云服务器模式 → 优先后端托管 frontend/dist（单端口 8000 访问）
-    # 2) 缺 dist 时尝试自动构建（npm install && npm run build）
-    # 3) 构建不了但有 node_modules → Vite dev（--server 时绑定 0.0.0.0，可远程访问）
-    # 4) 都没有 → API-only 模式，并给出指引
+    # ── 前端模式决策（优先把前后端搭起来，用户才能打开界面改 EVA 地址）──
+    # 1) --serve-static / --server → 后端托管 frontend/dist（单端口访问），缺 dist 自动 npm install + build
+    # 2) 普通模式 → Vite dev；缺 frontend/node_modules 自动 npm install
+    # 3) 都不行 → API-only，并给出指引
     dist_index = ROOT / "frontend" / "dist" / "index.html"
     use_static = args.serve_static or args.server
     if use_static and not dist_index.exists():
         if _build_frontend():
             print("[frontend] 前端构建完成，由后端静态托管")
-        elif not (ROOT / "frontend" / "node_modules").exists():
+        else:
             print("[frontend] 构建失败（npm 不可用或依赖缺失），将以 API-only 模式启动")
             print("[frontend] 之后可手动构建：cd frontend && npm install && npm run build，重启后自动托管")
         use_static = dist_index.exists()
@@ -312,7 +341,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         os.environ["FRONTEND_SERVE_STATIC"] = "true"
         os.environ["FRONTEND_BUILD_DIR"] = str(ROOT / "frontend" / "dist")
         args.with_frontend = False
-        print(f"[frontend] 静态前端由后端托管 http://{args.host}:{args.port}")
+    elif args.serve_static:
+        # 用户显式要求静态托管但构建失败：不要悄悄改起 Vite dev
+        args.with_frontend = False
 
     # Resolve host/port: CLI args take precedence, then YAML/env config defaults
     host = args.host
@@ -338,9 +369,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("[eva] 已跳过自动启动客服工作台（--skip-eva / --server）")
     else:
         start_eva_app(eva_dir)
-    # 2) 前端（--serve-static 时后端托管，不启 Vite）
-    frontend_process = start_frontend(args.frontend_port, frontend_host) if args.with_frontend else None
-    # 3) cookie_watcher / ark_capture 由守护线程监控，异常退出自动重启
+    # 2) cookie_watcher / ark_capture 由守护线程监控，异常退出自动重启
     watcher_sup = None
     ark_sup = None
     if not args.skip_watcher:
@@ -351,6 +380,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ark_sup.start()
     if args.server and (args.skip_watcher or args.skip_ark):
         print(f"[server] 云服务器模式：{('跳过 cookie_watcher ' if args.skip_watcher else '')}{('跳过 ark_capture ' if args.skip_ark else '')}")
+    # 3) 前端（--serve-static 时后端托管；普通模式起 Vite dev，缺依赖自动 npm install）
+    frontend_process = start_frontend(args.frontend_port, frontend_host) if args.with_frontend else None
+
+    # ── 启动汇总：一眼看到前后端地址与 EVA 配置入口 ──
+    print("-" * 62)
+    print(f"[startup] 后端 API:  http://{host}:{port}")
+    if use_static:
+        print(f"[startup] 前端界面: http://{host}:{port}/  （后端托管构建产物）")
+    elif frontend_process:
+        print(f"[startup] 前端界面: http://{frontend_host}:{args.frontend_port}  （Vite dev）")
+    else:
+        print("[startup] 前端未启动，当前仅 API 可用（见上方构建提示）")
+    if eva_dir_ok:
+        print(f"[startup] EVA 目录: {eva_dir}（客服工作台/凭证服务状态见上方日志）")
+    else:
+        print(f"[startup] EVA 目录: {eva_dir} 不存在 → 打开上方前端地址进入网页『设置』填入实际安装目录，")
+        print("[startup] 保存（写入 config/default.yaml）后重启 python main.py 即生效；也可用 --eva-dir / EVA_DIR 指定")
+    print("-" * 62)
 
     print(f"Starting backend at http://{host}:{port}")
     try:

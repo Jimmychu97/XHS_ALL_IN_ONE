@@ -175,13 +175,15 @@ python main.py
 ```
 
 启动后访问：
-- 前端: http://localhost:5173
+- 前端: http://localhost:5173（或后端静态托管时 `http://<host>:<port>/`）
 - API 文档: http://localhost:8000/docs
+
+> 控制台最后会打印「启动汇总」，一眼看到前后端地址与 EVA 目录状态。
 
 `python main.py` 会自动完成以下全部步骤，无需手动一个个启动：
 
 1. **千帆客服工作台（EVA）**：若 CDP 调试端口 `9222` 未就绪，自动从 EVA 安装目录拉起 `千帆客服工作台.exe`（可用 `--skip-eva` 关闭）
-2. **前端**：Vite dev server（`--with-frontend`，默认开启；`--frontend-port` 改端口）
+2. **前端**：Vite dev server（`--with-frontend`，默认开启；`--frontend-port` 改端口）；若 `frontend/node_modules` 缺失会自动执行 `npm install`，无需手动进 `frontend` 装依赖
 3. **cookie_watcher.py**：凭证保活 + 消息同步（守护线程监控，异常退出自动重启）
 4. **ark_capture.py --daemon**：ark 后台保活（守护线程监控，异常退出自动重启）
 5. **后端**：FastAPI（`--host` / `--port` / `--reload` 可调）
@@ -193,9 +195,9 @@ python main.py
 > 登录态恢复后自动保存 cookie 并切回后台保活，无需手动运行 `python ark_capture.py`。
 
 > **切换 EVA 安装目录**：只需改一处，程序内所有地址自动跟随。
-> 优先级：`--eva-dir` 参数 > `EVA_DIR` 环境变量 > `config/default.yaml` 的 `walle.eva_dir` > 默认 `F:\eva`。
-> 例如：`python main.py --eva-dir D:/eva`，或在系统环境变量中设置 `EVA_DIR=D:/eva`，
-> 也可在 Web 端「Walle 客服 → EVA 设置」页面保存后重启服务。
+> 优先级：`--eva-dir` 参数 > `EVA_DIR` 环境变量 > `config/default.yaml` 的 `walle.eva_dir`（Web 端「EVA 设置」页保存后写入，重启生效）> 自动探测各盘符已安装的客服工作台 > 兜底 `<项目所在盘>:\eva`。
+> 即：服务器装在 C 盘 → 默认就是 `C:\eva`，本机在 F 盘 → 默认 `F:\eva`，零配置自动识别；
+> 例如显式指定：`python main.py --eva-dir D:/eva`，或环境变量 `EVA_DIR=D:/eva`。
 
 ### Docker 部署
 

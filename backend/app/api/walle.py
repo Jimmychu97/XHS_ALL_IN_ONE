@@ -1338,8 +1338,8 @@ def img_proxy(
 
 @router.get("/eva-config")
 def get_eva_config(current_user: User = Depends(get_current_user)):
-    from backend.app.core.config import get_settings
-    return {"eva_dir": get_settings().walle_eva_dir}
+    from backend.app.core.config import get_eva_dir
+    return {"eva_dir": get_eva_dir()}
 
 
 @router.put("/eva-config")
@@ -1367,10 +1367,11 @@ def save_eva_config(
 def save_backend_token(
     current_user: User = Depends(get_current_user),
 ):
+    from backend.app.core.config import get_eva_dir
     from backend.app.core.security import create_refresh_token
     import pathlib
     token = create_refresh_token(current_user.id)
-    pathlib.Path("F:/eva/backend_token.txt").write_text(token, encoding="utf-8")
+    (pathlib.Path(get_eva_dir()) / "backend_token.txt").write_text(token, encoding="utf-8")
     return {"ok": True}
 
 
@@ -1380,10 +1381,10 @@ def auto_import_eva(
     db: Session = Depends(get_db),
 ):
     """静默自动导入：优先 CDP，fallback 文件，都没有返回 {ok: False}"""
-    from backend.app.core.config import get_settings
-    eva_dir = get_settings().walle_eva_dir or r"F:\eva"
-    eva_path = f"{eva_dir}/eva_cookies.json"
+    from backend.app.core.config import get_eva_dir
     import os, json as _json, urllib.request as _ur
+    eva_dir = get_eva_dir()
+    eva_path = f"{eva_dir}/eva_cookies.json"
     cookies: dict = {}
     try:
         pages = _json.loads(_ur.urlopen("http://localhost:9222/json", timeout=2).read())
@@ -1432,12 +1433,15 @@ def auto_import_eva(
 
 @router.post("/accounts/import-eva")
 def import_eva_account(
-    eva_path: str = Query(default=r"F:\eva\eva_cookies.json", description="eva_cookies.json 路径"),
+    eva_path: str = Query(default=None, description="eva_cookies.json 路径，缺省使用 EVA 目录默认路径"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """优先从 CDP 9222 实时抓 walle cookie，fallback 读 eva_cookies.json 文件"""
     import os, json as _json, urllib.request as _ur
+    if not eva_path:
+        from backend.app.core.config import get_eva_dir
+        eva_path = os.path.join(get_eva_dir(), "eva_cookies.json")
 
     cookies: dict = {}
 

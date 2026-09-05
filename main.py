@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -10,6 +12,60 @@ from typing import Optional, Sequence
 
 
 ROOT = Path(__file__).resolve().parent
+
+EVA_CDP_PORT = 9222
+
+
+def resolve_eva_dir() -> str:
+    """解析 EVA（千帆客服工作台）安装目录：EVA_DIR 环境变量 > 配置文件 walle.eva_dir > F:\\eva"""
+    env = os.environ.get("EVA_DIR", "").strip()
+    if env:
+        return env
+    try:
+        from backend.app.core.config import get_eva_dir as _cfg_eva
+        d = _cfg_eva()
+        if d:
+            return d
+    except Exception:
+        pass
+    return r"F:\eva"
+
+
+def find_eva_executable(eva_dir: str) -> Optional[Path]:
+    """在 EVA 目录下查找客服工作台可执行文件（优先 千帆客服工作台.exe，回退任意非卸载 exe）"""
+    d = Path(eva_dir)
+    if not d.is_dir():
+        return None
+    for name in ("千帆客服工作台.exe", "eva.exe", "Eva.exe"):
+        p = d / name
+        if p.exists():
+            return p
+    for p in sorted(d.glob("*.exe")):
+        if "uninstall" not in p.name.lower():
+            return p
+    return None
+
+
+def cdp_reachable(port: int = EVA_CDP_PORT) -> bool:
+    """检测 127.0.0.1:9222 CDP 调试端口是否可达（即客服工作台是否已在运行）"""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def start_eva_app(eva_dir: str) -> Optional[subprocess.Popen]:
+    """自动拉起千帆客服工作台（若 CDP 9222 尚不可达且目录下能找到可执行文件）"""
+    if cdp_reachable():
+        print(f"[eva] 客服工作台已在运行（CDP 127.0.0.1:{EVA_CDP_PORT} 可达），跳过启动")
+        return None
+    exe = find_eva_executable(eva_dir)
+    if exe is None:
+        print(f"[eva] 未在 {eva_dir} 找到客服工作台可执行文件，跳过自动启动")
+        return None
+    print(f"[eva] 自动启动客服工作台: {exe}")
+    return subprocess.Popen([str(exe)], cwd=eva_dir)
 
 
 class _Supervisor:
@@ -82,6 +138,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--reload", action="store_true", help="Enable Uvicorn reload.")
     parser.add_argument("--with-frontend", action="store_true", default=True, help="Also start the frontend Vite dev server.")
     parser.add_argument("--frontend-port", type=int, default=5173, help="Frontend dev server port.")
+    parser.add_argument("--eva-dir", default="", help="千帆客服工作台(EVA)安装目录，例如 D:/eva；默认读取 EVA_DIR 环境变量或 config/default.yaml 的 walle.eva_dir")
+    parser.add_argument("--skip-eva", action="store_true", help="不自动启动千帆客服工作台(EVA)。")
     return parser.parse_args(argv)
 
 
@@ -110,28 +168,21 @@ def start_frontend(port: int) -> Optional[subprocess.Popen]:
 
 
 def start_cookie_watcher() -> Optional[subprocess.Popen]:
-    try:
-        from backend.app.core.config import get_settings
-        eva_dir = get_settings().walle_eva_dir
-    except Exception:
-        eva_dir = ""
+    eva_dir = resolve_eva_dir()
 
     # Prefer project-internal copy, fall back to eva_dir
     project_watcher = ROOT / "cookie_watcher.py"
     if project_watcher.exists():
         watcher = project_watcher
-    elif eva_dir:
-        watcher = Path(eva_dir) / "cookie_watcher.py"
     else:
-        watcher = Path(r"F:\eva\cookie_watcher.py")
+        watcher = Path(eva_dir) / "cookie_watcher.py"
 
     if not watcher.exists():
+        print("[watcher] 未找到 cookie_watcher.py，跳过凭证保活服务")
         return None
 
-    cmd = [sys.executable, str(watcher)]
-    if eva_dir:
-        cmd += ["--eva-dir", eva_dir]
-    print(f"Starting cookie_watcher.py from {watcher}")
+    cmd = [sys.executable, str(watcher), "--eva-dir", eva_dir]
+    print(f"[watcher] 启动 cookie_watcher.py（EVA 目录: {eva_dir}）")
     return subprocess.Popen(cmd)
 
 
@@ -146,6 +197,12 @@ def start_ark_capture() -> Optional[subprocess.Popen]:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     _setup_rotating_log()
+
+    # 一键启动：EVA_DIR 环境变量 / --eva-dir 参数 > YAML 配置
+    eva_dir = args.eva_dir.strip() or resolve_eva_dir()
+    if args.eva_dir.strip():
+        os.environ["EVA_DIR"] = args.eva_dir.strip()
+    print(f"[eva] EVA 安装目录: {eva_dir}")
 
     # Resolve host/port: CLI args take precedence, then YAML/env config defaults
     host = args.host
@@ -162,8 +219,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         pass
 
     stop_event = threading.Event()
+    # 1) 客服工作台（EVA）若未运行则自动拉起（--skip-eva 可关闭）
+    if args.skip_eva:
+        print("[eva] 已通过 --skip-eva 跳过自动启动客服工作台")
+    else:
+        start_eva_app(eva_dir)
+    # 2) 前端
     frontend_process = start_frontend(args.frontend_port) if args.with_frontend else None
-    # cookie_watcher / ark_capture 由守护线程监控，异常退出自动重启
+    # 3) cookie_watcher / ark_capture 由守护线程监控，异常退出自动重启
     watcher_sup = _Supervisor("cookie_watcher", start_cookie_watcher, stop_event)
     ark_sup = _Supervisor("ark_capture", start_ark_capture, stop_event)
     watcher_sup.start()

@@ -27,6 +27,26 @@ LOG_DIR = _BASE / "data" / "logs"
 
 COOKIE_REFRESH_INTERVAL = 30 * 60  # 30 分钟刷新一次
 
+# 登录失效信号文件：后端同步商品检测到登录失败时写入，daemon 轮询到后自动打开有头浏览器
+RELOCK_FLAG = _BASE / "data" / "ark_relogin.flag"
+
+
+def _relogin_requested(max_age: int = 300) -> bool:
+    """是否有登录失效信号（文件存在且 5 分钟内刚写入）"""
+    try:
+        if not RELOCK_FLAG.exists():
+            return False
+        return time.time() - RELOCK_FLAG.stat().st_mtime <= max_age
+    except Exception:
+        return False
+
+
+def _clear_relogin_flag() -> None:
+    try:
+        RELOCK_FLAG.unlink(missing_ok=True)
+    except Exception:
+        pass
+
 CAPTURE_DOMAINS = (
     "ark.xiaohongshu.com",
     "edith.xiaohongshu.com",
@@ -217,58 +237,104 @@ async def _capture_mode():
 
 
 async def _daemon_mode():
-    """常驻模式：headless，每 30 分钟刷新 cookie，无需页面一直开着"""
-    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ark cookie 保活服务启动")
-    async with async_playwright() as p:
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        context = await p.chromium.launch_persistent_context(
-            str(PROFILE_DIR),
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        # 注入已有 cookie
-        if COOKIE_FILE.exists():
-            try:
-                data = json.loads(COOKIE_FILE.read_text("utf-8"))
-                cookies = data.get("playwright_cookies") or []
-                if cookies:
-                    await context.add_cookies(cookies)
-                    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 已注入 {len(cookies)} 条 cookie")
-            except Exception as e:
-                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] cookie 注入失败: {e}")
-
-        page = context.pages[0] if context.pages else await context.new_page()
-
-        # 首次加载页面，触发登录态验证
-        try:
-            await page.goto(ARK_URL, wait_until="domcontentloaded", timeout=30000)
-            n = await _save_cookies(context)
-            print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 初始 cookie 已保存 ({n} 条)")
-            await _check_session_valid(page)
-        except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 初始加载失败: {e}")
-
-        # 心跳循环
-        while True:
-            await asyncio.sleep(COOKIE_REFRESH_INTERVAL)
-            try:
-                await page.reload(wait_until="domcontentloaded", timeout=30000)
-                n = await _save_cookies(context)
-                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] cookie 已刷新 ({n} 条)")
-                await _check_session_valid(page)
-            except Exception as e:
-                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 刷新失败: {e}，5 秒后重试...")
-                await asyncio.sleep(5)
+    """
+    常驻模式：headless 后台保活，每 30 分钟刷新 cookie。
+    发现会话失效（自身检测或收到后端同步请求）时，自动切到有头浏览器请人工确认登录态，
+    登录恢复后保存 cookie 并切回 headless 保活。
+    """
+    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ark cookie 保活服务启动（会话失效将自动打开浏览器请人工登录）")
+    headless = True
+    while True:
+        async with async_playwright() as p:
+            PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            context = await p.chromium.launch_persistent_context(
+                str(PROFILE_DIR),
+                headless=headless,
+                args=["--disable-blink-features=AutomationControlled"],
+                viewport={"width": 1440, "height": 900} if not headless else None,
+            )
+            # 注入已有 cookie
+            if COOKIE_FILE.exists():
                 try:
-                    await page.goto(ARK_URL, wait_until="domcontentloaded", timeout=30000)
-                    n = await _save_cookies(context)
-                    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 重试成功 ({n} 条)")
-                    await _check_session_valid(page)
-                except Exception as e2:
-                    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 重试失败: {e2}")
+                    data = json.loads(COOKIE_FILE.read_text("utf-8"))
+                    cookies = data.get("playwright_cookies") or []
+                    if cookies:
+                        await context.add_cookies(cookies)
+                        print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 已注入 {len(cookies)} 条 cookie")
+                except Exception as e:
+                    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] cookie 注入失败: {e}")
+
+            page = context.pages[0] if context.pages else await context.new_page()
+
+            # 首次加载页面，触发登录态验证
+            try:
+                await page.goto(ARK_URL, wait_until="domcontentloaded", timeout=30000)
+                n = await _save_cookies(context)
+                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 初始 cookie 已保存 ({n} 条)")
+                session_ok = await _check_session_valid(page)
+            except Exception as e:
+                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 初始加载失败: {e}")
+                session_ok = False
+
+            # headless 模式下若初始会话即失效 → 直接切有头浏览器
+            if headless and not session_ok:
+                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），自动打开浏览器请人工确认登录态")
+                headless = False
+                await context.close()
+                continue
+
+            # ── 有头模式：等待用户人工登录确认 ──
+            if not headless:
+                print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 浏览器已打开（有头），请在窗口中人工确认/重新登录...")
+                while True:
+                    await asyncio.sleep(5)
+                    if await _check_session_valid(page):
+                        n = await _save_cookies(context)
+                        print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ✅ 登录态已恢复，保存 {n} 条 cookie，切回后台保活")
+                        headless = True
+                        break
+                    if not context.pages:  # 用户关闭了浏览器窗口
+                        print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 浏览器窗口已关闭，切回后台保活")
+                        headless = True
+                        break
+                _clear_relogin_flag()
+                await context.close()
+                continue
+
+            # ── headless 保活心跳（每 10s 检查失效信号 + 每 30min 刷新 cookie）──
+            last_refresh = time.time()
+            while True:
+                if _relogin_requested():
+                    print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 收到登录失效信号，自动打开浏览器请人工确认登录态")
+                    _clear_relogin_flag()
+                    headless = False
+                    break
+                if time.time() - last_refresh >= COOKIE_REFRESH_INTERVAL:
+                    last_refresh = time.time()
+                    try:
+                        await page.reload(wait_until="domcontentloaded", timeout=30000)
+                        n = await _save_cookies(context)
+                        print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] cookie 已刷新 ({n} 条)")
+                        if not await _check_session_valid(page):
+                            print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），自动打开浏览器请人工确认登录态")
+                            headless = False
+                            break
+                    except Exception as e:
+                        print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 刷新失败: {e}，5 秒后重试...")
+                        await asyncio.sleep(5)
+                        try:
+                            await page.goto(ARK_URL, wait_until="domcontentloaded", timeout=30000)
+                            n = await _save_cookies(context)
+                            print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 重试成功 ({n} 条)")
+                        except Exception as e2:
+                            print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] 重试失败: {e2}")
+                await asyncio.sleep(10)
+
+            _clear_relogin_flag()
+            await context.close()
 
 
-async def _check_session_valid(page) -> None:
+async def _check_session_valid(page) -> bool:
     """校验 ark 会话是否仍有效（页面内 fetch seller/info，code=0 为有效）"""
     try:
         valid = await page.evaluate("""
@@ -280,10 +346,9 @@ async def _check_session_valid(page) -> None:
                 } catch (e) { return false; }
             }
         """)
-        if not valid:
-            print(f"[{time.strftime('%H:%M:%S')}] [DAEMON] ⚠️ 会话可能失效（登录过期），请打开浏览器人工确认登录态")
+        return bool(valid)
     except Exception:
-        pass
+        return False
 
 
 def _save_sku_to_db(item_id: str, extras: dict):

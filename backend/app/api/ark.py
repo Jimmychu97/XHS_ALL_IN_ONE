@@ -19,6 +19,29 @@ router = APIRouter(prefix="/ark", tags=["ark"])
 
 _CARD_TYPE_LABEL = {2: "在售", 3: "仓库中", 4: "已售罄", 5: "审核中", 6: "已下架", 10: "违规下架"}
 
+# 与 ark_capture.py 的 RELOCK_FLAG 一致：登录失效信号文件
+_RELOGIN_FLAG = Path(__file__).resolve().parent.parent.parent.parent / "data" / "ark_relogin.flag"
+
+
+def _signal_ark_relogin() -> None:
+    """写入登录失效信号，ark_capture daemon 会自动打开有头浏览器请人工登录"""
+    import time as _time
+    try:
+        _RELOGIN_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        _RELOGIN_FLAG.write_text(str(int(_time.time())), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _looks_like_login_failure(msg: str, res: dict | None = None) -> bool:
+    """判断失败是否由 ark 登录失效引起（用于触发自动打开浏览器）"""
+    text = f"{msg or ''} {res or ''}".lower()
+    keywords = ("登录", "未登录", "失效", "过期", "login", "unauthorized", "401")
+    if any(k in text for k in keywords):
+        return True
+    code = (res or {}).get("code")
+    return code in (1001, 1002)
+
 
 def _parse_render_data(res: dict) -> dict:
     """publish_render 的 data 字段是二次序列化 JSON 字符串，统一解析为 dict"""
@@ -374,7 +397,8 @@ async def _sync_skus_with_playwright(
                 # 先去列表页建立会话，否则 publish_render 返回 code=-1
                 await page.goto("https://ark.xiaohongshu.com/app-item/list/shelf", wait_until="networkidle", timeout=45000)
                 if "login" in page.url:
-                    errors.append("ark 未登录，请先运行 ark_capture.py 完成登录")
+                    _signal_ark_relogin()
+                    errors.append("ark 未登录，已自动打开浏览器，请人工确认登录态后重试")
                     await context.close()
                     return 0
                 await _asyncio.sleep(1)
@@ -400,7 +424,12 @@ async def _sync_skus_with_playwright(
                         errors.append(f"item_id={item_id}: 拦截响应失败: {_e}")
                         continue
                     if res.get("code") not in (0, 200) or not res.get("success"):
-                        errors.append(f"item_id={item_id}: publish_render code={res.get('code')} msg={res.get('msg','')}")
+                        msg = res.get("msg", "")
+                        if _looks_like_login_failure(msg, res):
+                            _signal_ark_relogin()
+                            errors.append(f"item_id={item_id}: 登录失效（{msg}），已自动打开浏览器，请人工确认登录态后重试")
+                        else:
+                            errors.append(f"item_id={item_id}: publish_render code={res.get('code')} msg={msg}")
                         continue
                     extras = _extract_render_extras(res)
                     if not extras["_sku_list"]:
@@ -457,7 +486,11 @@ def sync_products(
                 break
 
             if not success:
-                errors.append(f"card_type={card_type}: {msg}")
+                if _looks_like_login_failure(msg, res):
+                    _signal_ark_relogin()
+                    errors.append(f"card_type={card_type}: 登录失效（{msg}），已自动打开浏览器，请人工确认登录态后重试")
+                else:
+                    errors.append(f"card_type={card_type}: {msg}")
                 break
 
             data = (res or {}).get("data") or {}

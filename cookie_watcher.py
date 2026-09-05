@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import pathlib
 import threading
 import time
@@ -15,9 +16,30 @@ import websockets
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
+def _resolve_default_eva_dir() -> str:
+    """默认 EVA 目录：环境变量 EVA_DIR > config/default.yaml walle.eva_dir > F:/eva"""
+    env = os.environ.get("EVA_DIR", "").strip()
+    if env:
+        return env
+    try:
+        import yaml
+        cfg = pathlib.Path(__file__).resolve().parent / "config" / "default.yaml"
+        if cfg.exists():
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+            val = (data.get("walle") or {}).get("eva_dir")
+            if val:
+                return str(val)
+    except Exception:
+        pass
+    return "F:/eva"
+
+
+_DEFAULT_EVA_DIR = _resolve_default_eva_dir()
+
+
 def _parse_args():
     parser = argparse.ArgumentParser(description="XHS Walle Cookie Watcher")
-    parser.add_argument("--eva-dir", default="F:/eva", help="千帆客服工作台安装目录")
+    parser.add_argument("--eva-dir", default=_DEFAULT_EVA_DIR, help="千帆客服工作台安装目录")
     parser.add_argument("--backend", default="http://127.0.0.1:8000", help="后端地址")
     parser.add_argument("--cdp-port", type=int, default=9222, help="CDP 调试端口")
     parser.add_argument("--send-port", type=int, default=9223, help="发消息服务端口")

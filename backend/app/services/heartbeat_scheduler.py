@@ -124,12 +124,15 @@ class AccountHeartbeatScheduler:
         import pathlib
         import time as _time
         import shutil as _shutil
+        from backend.app.core.config import get_eva_dir
         issues: list[tuple[str, str]] = []
 
+        eva_dir = get_eva_dir()
+
         # 1) 平台后端 token（backend_token.txt）
-        tf = pathlib.Path("F:/eva/backend_token.txt")
+        tf = pathlib.Path(eva_dir) / "backend_token.txt"
         if not tf.exists():
-            issues.append(("平台后端 token", "F:/eva/backend_token.txt 不存在"))
+            issues.append(("平台后端 token", f"{eva_dir}/backend_token.txt 不存在"))
         else:
             from backend.app.core.security import decode_token
             try:
@@ -142,8 +145,8 @@ class AccountHeartbeatScheduler:
 
         # 2) Walle 凭证
         for f, label in (
-            ("F:/eva/eva_cookies.json", "Walle 凭证 eva_cookies"),
-            ("F:/eva/edith_auth.json", "Walle 凭证 edith_auth"),
+            (pathlib.Path(eva_dir) / "eva_cookies.json", "Walle 凭证 eva_cookies"),
+            (pathlib.Path(eva_dir) / "edith_auth.json", "Walle 凭证 edith_auth"),
         ):
             p = pathlib.Path(f)
             if not p.exists():

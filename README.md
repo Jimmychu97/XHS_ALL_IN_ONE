@@ -170,15 +170,32 @@ cd frontend && npm install && cd ..
 ### 启动项目
 
 ```bash
-# 一键启动（后端 + 前端）
-python main.py --with-frontend
+# 一键启动（后端 + 前端 + 千帆客服工作台自动拉起 + cookie_watcher 凭证保活 + ark_capture）
+python main.py
 ```
 
 启动后访问：
 - 前端: http://localhost:5173
 - API 文档: http://localhost:8000/docs
 
+`python main.py` 会自动完成以下全部步骤，无需手动一个个启动：
+
+1. **千帆客服工作台（EVA）**：若 CDP 调试端口 `9222` 未就绪，自动从 EVA 安装目录拉起 `千帆客服工作台.exe`（可用 `--skip-eva` 关闭）
+2. **前端**：Vite dev server（`--with-frontend`，默认开启；`--frontend-port` 改端口）
+3. **cookie_watcher.py**：凭证保活 + 消息同步（守护线程监控，异常退出自动重启）
+4. **ark_capture.py --daemon**：ark 后台保活（守护线程监控，异常退出自动重启）
+5. **后端**：FastAPI（`--host` / `--port` / `--reload` 可调）
+
 首次启动自动创建数据库，注册账号即可使用。
+
+> **ark 登录失效自动打开浏览器**：同步商品 / SKU 时若检测到 ark 登录过期（`[DAEMON] ⚠️ 会话可能失效`），
+> `ark_capture.py --daemon` 会自动从 headless 切到有头浏览器并打开 `ark.xiaohongshu.com`，
+> 登录态恢复后自动保存 cookie 并切回后台保活，无需手动运行 `python ark_capture.py`。
+
+> **切换 EVA 安装目录**：只需改一处，程序内所有地址自动跟随。
+> 优先级：`--eva-dir` 参数 > `EVA_DIR` 环境变量 > `config/default.yaml` 的 `walle.eva_dir` > 默认 `F:\eva`。
+> 例如：`python main.py --eva-dir D:/eva`，或在系统环境变量中设置 `EVA_DIR=D:/eva`，
+> 也可在 Web 端「Walle 客服 → EVA 设置」页面保存后重启服务。
 
 ### Docker 部署
 
@@ -225,7 +242,7 @@ asar pack F:\eva\resources\app-unpacked F:\eva\resources\app.asar
 
 ### 第二步：启动凭证保活服务
 
-客服工作台必须保持运行（本来就要开着接客服）。在另一个终端启动保活脚本：
+客服工作台必须保持运行（本来就要开着接客服）。**`python main.py` 一键启动时会自动拉起客服工作台并运行 cookie_watcher，无需手动执行。** 也可以在另一个终端手动启动保活脚本：
 
 ```bash
 python F:\eva\cookie_watcher.py
@@ -235,6 +252,8 @@ python F:\eva\cookie_watcher.py
 - 自动连接客服工作台调试端口
 - 实时监听 token 刷新事件
 - 每 30 秒自动保存最新凭证到本地文件
+
+> 凭证文件位置跟随 EVA 安装目录变量：`--eva-dir` / `EVA_DIR` 环境变量 / `config/default.yaml` 的 `walle.eva_dir`。
 
 | 文件 | 内容 |
 |---|---|

@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.api import accounts, ai, auth, auto_tasks, drafts, files, keyword_groups, login_sessions, model_configs, notes, notifications, publish, tags, tasks, account_credentials_api, walle, ark
 from backend.app.api.platforms import registry
 from backend.app.api.platforms.xhs import analytics, crawl, creator, monitoring, pc, qianfan, qianfan_login_api
-from backend.app.core.config import get_settings
+from backend.app.core.config import get_eva_dir, get_settings
 from backend.app.core.database import init_db
 from backend.app.services.scheduler_service import run_due_auto_tasks, shutdown_due_publish_scheduler, start_due_publish_scheduler
 from backend.app.services.heartbeat_scheduler import start_heartbeat_scheduler, stop_heartbeat_scheduler
@@ -23,7 +23,7 @@ def _start_token_self_heal() -> threading.Thread:
         import time as _time
         import pathlib
         from backend.app.core.security import create_refresh_token, decode_token
-        token_file = pathlib.Path("F:/eva/backend_token.txt")
+        token_file = pathlib.Path(get_eva_dir()) / "backend_token.txt"
         while True:
             try:
                 need = False

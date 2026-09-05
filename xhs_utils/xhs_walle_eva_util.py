@@ -4,8 +4,10 @@ import json
 import pathlib
 import time
 
+from xhs_utils.eva_env import get_eva_path
+
 # cookie_watcher.py 实时保存的文件（优先读）
-_WATCHER_COOKIE_PATH = pathlib.Path("F:/eva/eva_cookies.json")
+_WATCHER_COOKIE_PATH = get_eva_path("eva_cookies.json")
 # nedb 兜底（仅本地环境）
 _DB_PATH = pathlib.Path.home() / "AppData" / "Roaming" / "eva" / "db" / "autoLogin.db"
 # cookie 有效期阈值（秒），超过此时间认为可能过期

@@ -10,16 +10,18 @@ import requests
 import websockets
 from loguru import logger
 
+from xhs_utils.eva_env import get_eva_path
+
 CDP_URL = "http://localhost:9222"
-WALLE_SAVE = pathlib.Path("F:/eva/eva_cookies.json")
-EDITH_SAVE = pathlib.Path("F:/eva/edith_auth.json")
-_ARK_DEFAULT_SAVE = pathlib.Path("F:/eva/ark_cookies.json")  # 旧路径兼容
+WALLE_SAVE = get_eva_path("eva_cookies.json")
+EDITH_SAVE = get_eva_path("edith_auth.json")
+_ARK_DEFAULT_SAVE = get_eva_path("ark_cookies.json")  # 旧路径兼容
 _ARK_PROJECT_SAVE = pathlib.Path(__file__).resolve().parent.parent / "data" / "ark_cookies.json"
 _CACHE_MAX_AGE = 3600 * 6
 
 
 def _resolve_ark_save(cookie_file: str = "") -> pathlib.Path:
-    """按优先级解析 ark_cookies.json 路径：参数 > 项目 data/ > F:/eva/"""
+    """按优先级解析 ark_cookies.json 路径：参数 > 项目 data/ > EVA 目录"""
     if cookie_file:
         p = pathlib.Path(cookie_file)
         if p.exists():

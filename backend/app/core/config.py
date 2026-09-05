@@ -158,4 +158,19 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     yaml_values = _load_yaml_config()
+    # EVA_DIR 环境变量优先于 YAML 配置（walle.eva_dir）
+    env_eva = os.environ.get("EVA_DIR", "").strip()
+    if env_eva:
+        yaml_values["walle_eva_dir"] = env_eva
     return Settings(**yaml_values)
+
+
+def get_eva_dir() -> str:
+    """返回 EVA（千帆客服工作台）安装目录；未配置时回退到默认 F:\\eva"""
+    try:
+        d = get_settings().walle_eva_dir
+    except Exception:
+        d = ""
+    if d:
+        return d
+    return r"F:\eva"

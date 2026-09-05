@@ -370,19 +370,46 @@ def _handle_sync_item(item_type: str, data_str: str):
     })
 
 
-# WS hook 注入脚本：捕获 apppush WS 实例，并暴露 __ws_send 发消息函数
+# WS hook 注入脚本：捕获 apppush WS 实例（构造时即登记，重连也能跟上），并暴露 __ws_send 发消息函数
 _WS_HOOK_JS = """
 (function() {
-    if (window.__apppush_ws_hooked) return 'already';
-    window.__apppush_ws_hooked = true;
-    const orig = WebSocket.prototype.send;
-    WebSocket.prototype.send = function(data) {
-        if (this.url && this.url.includes('apppush')) window.__apppush_ws = this;
-        return orig.call(this, data);
+    if (window.__apppush_hooked) return 'already';
+    window.__apppush_hooked = true;
+    var NativeWS = window.WebSocket;
+    function looksApppush(url) {
+        return url && (url.indexOf('apppush') !== -1 || url.indexOf('impaas') !== -1);
+    }
+    // 1) 构造器 hook：应用新建 apppush 连接时立刻登记（覆盖重连场景）
+    window.WebSocket = function(url, protocols) {
+        var ws;
+        try { ws = protocols === undefined ? new NativeWS(url) : new NativeWS(url, protocols); }
+        catch (e) { ws = new NativeWS(url); }
+        if (looksApppush(url)) {
+            window.__apppush_ws = ws;
+            window.__apppush_ws_url = url;
+        }
+        return ws;
+    };
+    window.WebSocket.prototype = NativeWS.prototype;
+    window.WebSocket.CONNECTING = NativeWS.CONNECTING;
+    window.WebSocket.OPEN = NativeWS.OPEN;
+    window.WebSocket.CLOSING = NativeWS.CLOSING;
+    window.WebSocket.CLOSED = NativeWS.CLOSED;
+    // 2) send hook：兜底捕获已有连接
+    var origSend = NativeWS.prototype.send;
+    NativeWS.prototype.send = function(data) {
+        if (looksApppush(this.url)) {
+            window.__apppush_ws = this;
+            window.__apppush_ws_url = this.url;
+        }
+        return origSend.call(this, data);
     };
     return 'hooked';
 })()
 """
+
+# Python 侧记录的最近 apppush WS URL（来自 CDP Network.webSocketCreated），用于发送兜底重连
+_apppush_last_url = ""
 
 
 async def _cdp_eval_independent(js: str, timeout: int = 15) -> dict:
@@ -405,7 +432,11 @@ async def _cdp_eval_independent(js: str, timeout: int = 15) -> dict:
 
 
 async def _cdp_send_message_independent(app_cid: str, text: str, receiver_app_uid: str = "") -> dict:
-    """通过渲染进程的 apppush WebSocket 发消息。"""
+    """通过渲染进程的 apppush WebSocket 发消息。
+
+    自带自愈：页面刷新后自动重新注入 hook；连接未就绪时等待其 OPEN；
+    还不行则用已知 apppush URL 新建连接兜底重连。
+    """
     import uuid as _uuid
     now = int(time.time() * 1000)
     smid = f"{now:x}-{_uuid.uuid4().hex[:11]}"
@@ -427,18 +458,93 @@ async def _cdp_send_message_independent(app_cid: str, text: str, receiver_app_ui
         },
     }
     frame_str = json.dumps(frame, ensure_ascii=False)
+    known_url = _apppush_last_url.replace("\\", "\\\\").replace('"', '\\"')
 
     js = f"""
     (function() {{
-        const ws = window.__apppush_ws;
-        if (!ws || ws.readyState !== 1) return JSON.stringify({{ok: false, error: 'ws not ready'}});
-        const frame = {frame_str};
-        frame.header.seq = (window.__apppush_seq = (window.__apppush_seq || 500) + 1);
-        ws.send(JSON.stringify(frame));
-        return JSON.stringify({{ok: true, seq: frame.header.seq}});
+        // 0) 确保 hook 已注入（页面刷新后自动重装）
+        if (!window.__apppush_hooked) {{
+            var NativeWS = window.WebSocket;
+            function looksApppush(url) {{
+                return url && (url.indexOf('apppush') !== -1 || url.indexOf('impaas') !== -1);
+            }}
+            window.WebSocket = function(url, protocols) {{
+                var ws;
+                try {{ ws = protocols === undefined ? new NativeWS(url) : new NativeWS(url, protocols); }}
+                catch (e) {{ ws = new NativeWS(url); }}
+                if (looksApppush(url)) {{ window.__apppush_ws = ws; window.__apppush_ws_url = url; }}
+                return ws;
+            }};
+            window.WebSocket.prototype = NativeWS.prototype;
+            window.WebSocket.CONNECTING = NativeWS.CONNECTING;
+            window.WebSocket.OPEN = NativeWS.OPEN;
+            window.WebSocket.CLOSING = NativeWS.CLOSING;
+            window.WebSocket.CLOSED = NativeWS.CLOSED;
+            var origSend = NativeWS.prototype.send;
+            NativeWS.prototype.send = function(data) {{
+                if (looksApppush(this.url)) {{ window.__apppush_ws = this; window.__apppush_ws_url = this.url; }}
+                return origSend.call(this, data);
+            }};
+            window.__apppush_hooked = true;
+        }}
+
+        var frame = {frame_str};
+        // 1) 现有连接就绪 → 直接发
+        function trySend() {{
+            var ws = window.__apppush_ws;
+            if (ws && ws.readyState === 1) {{
+                frame.header.seq = (window.__apppush_seq = (window.__apppush_seq || 500) + 1);
+                ws.send(JSON.stringify(frame));
+                return {{ok: true, seq: frame.header.seq, mode: 'live'}};
+            }}
+            return null;
+        }}
+        var r0 = trySend();
+        if (r0) return JSON.stringify(r0);
+
+        var knownUrl = window.__apppush_ws_url || '{known_url}';
+        var attempts = 0;
+        // 2) 短轮询等待现有连接 OPEN（最多 ~5s）
+        return new Promise(function(resolve) {{
+            var timer = setInterval(function() {{
+                attempts++;
+                var r = trySend();
+                if (r) {{ clearInterval(timer); resolve(JSON.stringify(r)); return; }}
+                if (attempts >= 25) {{
+                    clearInterval(timer);
+                    // 3) 兜底：用已知 URL 新建连接后发送
+                    if (!knownUrl) {{
+                        resolve(JSON.stringify({{ok: false, error: 'ws not ready'}}));
+                        return;
+                    }}
+                    try {{
+                        var nws = new window.WebSocket(knownUrl);
+                        var t2 = setTimeout(function() {{
+                            resolve(JSON.stringify({{ok: false, error: 'ws open timeout'}}));
+                        }}, 6000);
+                        nws.onopen = function() {{
+                            clearTimeout(t2);
+                            window.__apppush_ws = nws;
+                            var rr = trySend();
+                            resolve(JSON.stringify(rr ? rr : {{ok: false, error: 'ws send failed after open'}}));
+                        }};
+                        nws.onerror = function() {{
+                            clearTimeout(t2);
+                            resolve(JSON.stringify({{ok: false, error: 'ws reconnect error'}}));
+                        }};
+                        nws.onclose = function() {{
+                            clearTimeout(t2);
+                            resolve(JSON.stringify({{ok: false, error: 'ws closed'}}));
+                        }};
+                    }} catch (e) {{
+                        resolve(JSON.stringify({{ok: false, error: 'ws reconnect exception: ' + e.message}}));
+                    }}
+                }}
+            }}, 200);
+        }});
     }})()
     """
-    result = await _cdp_eval_independent(js)
+    result = await _cdp_eval_independent(js, timeout=20)
     print(f"[{time.strftime('%H:%M:%S')}] [SEND] {result}")
     return result
 
@@ -454,7 +560,14 @@ class _SendHandler(BaseHTTPRequestHandler):
         text = body.get("text", "")
         receiver_app_uid = body.get("receiver_app_uid", "")
         try:
-            result = asyncio.run(_cdp_send_message_independent(app_cid, text, receiver_app_uid))
+            # apppush 重连窗口内首次发送可能 ws not ready，最多重试 2 次
+            result = {"ok": False, "error": "no attempt"}
+            for attempt in range(3):
+                result = asyncio.run(_cdp_send_message_independent(app_cid, text, receiver_app_uid))
+                if result.get("ok"):
+                    break
+                if attempt < 2:
+                    time.sleep(2)
             ok = result.get("ok", False)
             resp = json.dumps({"ok": ok, "result": result}, ensure_ascii=False).encode()
             self.send_response(200)
@@ -590,6 +703,14 @@ async def watch():
                 # 捕获发往 ark 的 AT token
                 if auth and auth.startswith("AT-"):
                     _save_ark_at_token(auth)
+
+            # ── WebSocket 新建：记录 apppush 地址，供发送兜底重连使用 ──
+            elif method == "Network.webSocketCreated":
+                url = msg["params"].get("url", "")
+                if "apppush" in url or "impaas" in url:
+                    global _apppush_last_url
+                    _apppush_last_url = url
+                    print(f"[{time.strftime('%H:%M:%S')}] [WS] apppush 连接已创建: {url[:100]}")
 
             # ── HTTP 响应：impaas batch 接口补充历史消息 ──
             elif method == "Network.responseReceived":

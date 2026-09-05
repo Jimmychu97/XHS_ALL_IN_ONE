@@ -246,7 +246,7 @@ def _send_via_cookie_watcher(app_cid: str, text: str, receiver_app_uid: str = ""
                           ensure_ascii=False).encode()
         req = _ur.Request("http://127.0.0.1:9223", data=body,
                           headers={"Content-Type": "application/json"}, method="POST")
-        resp = json.loads(_ur.urlopen(req, timeout=25).read())
+        resp = json.loads(_ur.urlopen(req, timeout=45).read())
         return resp.get("ok", False), resp.get("result", {}).get("error", "")
     except Exception as e:
         return False, str(e)
